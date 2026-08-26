@@ -18,9 +18,10 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.query_vendas_sap import credito_disponivel_clientes, devolucoes_credito_motivo  # noqa: E402
+from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Crédito e Devoluções — Vendas SAP", page_icon="💳", layout="wide")
-st.title("💳 Crédito e Devoluções")
+st.title(":material/credit_card: Crédito e Devoluções")
 
 tipo_cliente_opcao = st.session_state.get("flt_tipo_cliente", "Todos")
 tipo_cliente = None if tipo_cliente_opcao == "Todos" else tipo_cliente_opcao
@@ -62,17 +63,18 @@ with tab_limite:
         c1.metric("Clientes", f"{len(df_credito):,}")
         c2.metric("Limite Concedido Total", f"R$ {df_credito['Valor_Limite_Credito_Concedido'].sum():,.2f}")
         c3.metric("Saldo Vencido Total", f"R$ {df_credito['Valor_Saldo_Vencido'].sum():,.2f}")
-        st.dataframe(
-            df_credito[
-                [
-                    "Codigo_Cliente", "Nome_Cliente", "Classe_Risco_Cliente", "Flag_Cliente_Bloqueado",
-                    "Valor_Limite_Credito_Concedido", "Valor_Exposicao_Total_SAP",
-                    "Valor_Saldo_A_Vencer", "Valor_Saldo_Vencido", "Valor_Credito_Disponivel",
-                ]
-            ],
-            width="stretch",
-            hide_index=True,
-        )
+        with card("credito-limite"):
+            st.dataframe(
+                df_credito[
+                    [
+                        "Codigo_Cliente", "Nome_Cliente", "Classe_Risco_Cliente", "Flag_Cliente_Bloqueado",
+                        "Valor_Limite_Credito_Concedido", "Valor_Exposicao_Total_SAP",
+                        "Valor_Saldo_A_Vencer", "Valor_Saldo_Vencido", "Valor_Credito_Disponivel",
+                    ]
+                ],
+                width="stretch",
+                hide_index=True,
+            )
 
 with tab_devolucao:
     st.caption(
@@ -101,7 +103,8 @@ with tab_devolucao:
             "Sem tradução oficial disponível pra esses códigos nesta base (T003T não replicada "
             "no HANA) — use o texto de motivo na tabela abaixo, que é bem mais informativo."
         )
-        st.bar_chart(df_dev.groupby("Tp_doc")["Montante"].sum())
+        with card("credito-devolucao-tipo-doc"):
+            st.bar_chart(df_dev.groupby("Tp_doc")["Montante"].sum())
 
         st.subheader("Motivos mais frequentes")
         top_motivos = (
@@ -110,12 +113,16 @@ with tab_devolucao:
             .sort_values("Valor_Total", ascending=False)
             .head(30)
         )
-        st.dataframe(top_motivos.style.format({"Valor_Total": "R$ {:,.2f}"}), width="stretch")
+        with card("credito-devolucao-motivos"):
+            st.dataframe(top_motivos.style.format({"Valor_Total": "R$ {:,.2f}"}), width="stretch")
 
         st.divider()
         st.subheader(f"Detalhe ({len(df_dev)} linhas)")
-        st.dataframe(
-            df_dev[["N_documento", "Codigo_Cliente", "Nome_Cliente", "Data_documento", "Tp_doc", "Montante", "Texto"]],
-            width="stretch",
-            hide_index=True,
-        )
+        with card("credito-devolucao-detalhe"):
+            st.dataframe(
+                df_dev[
+                    ["N_documento", "Codigo_Cliente", "Nome_Cliente", "Data_documento", "Tp_doc", "Montante", "Texto"]
+                ],
+                width="stretch",
+                hide_index=True,
+            )

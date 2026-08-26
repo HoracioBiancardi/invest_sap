@@ -28,11 +28,12 @@ from scripts.query_faturamento_comercial import (  # noqa: E402
 )
 from scripts.ui_charts_comercial import grafico_meta_realizado  # noqa: E402
 from scripts.ui_filtros_comercial import render_filtros_comercial  # noqa: E402
+from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(
     page_title="Faturamento vs Meta — Vendas Comercial", page_icon="🎯", layout="wide"
 )
-st.title("🎯 Faturamento Líquido vs Meta")
+st.title(":material/speed: Faturamento Líquido vs Meta")
 st.caption(
     "Fonte: `GOLD.vendas_sap.fct_faturamento_itens_sap` (Faturamento) + "
     "`GOLD.vendas.fat_meta_equipe` (Meta, SharePoint — planejamento, não transação). A "
@@ -118,19 +119,20 @@ c4.metric(
 
 st.divider()
 
-col_a, col_b = st.columns([3, 2])
-with col_a:
-    st.subheader("Faturamento diário — mês corrente")
-    if df_dia_mtd.empty:
-        st.info("Sem faturamento no mês corrente ainda.")
-    else:
-        st.bar_chart(df_dia_mtd.set_index("Dia")["Valor_Faturado"])
-with col_b:
-    st.subheader("Evolução mensal — ano corrente")
-    if df_mes_ytd.empty:
-        st.info("Sem faturamento no ano corrente ainda.")
-    else:
-        st.bar_chart(df_mes_ytd.set_index("Mes")["Valor_Faturado"])
+with card("fatmeta-evolucao"):
+    col_a, col_b = st.columns([3, 2])
+    with col_a:
+        st.subheader("Faturamento diário — mês corrente")
+        if df_dia_mtd.empty:
+            st.info("Sem faturamento no mês corrente ainda.")
+        else:
+            st.bar_chart(df_dia_mtd.set_index("Dia")["Valor_Faturado"])
+    with col_b:
+        st.subheader("Evolução mensal — ano corrente")
+        if df_mes_ytd.empty:
+            st.info("Sem faturamento no ano corrente ainda.")
+        else:
+            st.bar_chart(df_mes_ytd.set_index("Mes")["Valor_Faturado"])
 
 st.divider()
 
@@ -156,7 +158,8 @@ else:
         .fillna(0.0)
         .reset_index()
     )
-    st.altair_chart(grafico_meta_realizado(comparacao_tri, "Trimestre"), width="stretch")
+    with card("fatmeta-trimestral"):
+        st.altair_chart(grafico_meta_realizado(comparacao_tri, "Trimestre"), width="stretch")
 
 st.divider()
 
@@ -193,37 +196,45 @@ else:
     )
     resumo = resumo.sort_values("Valor_Realizado", ascending=False)
 
-    col_e, col_f = st.columns([2, 1])
-    with col_e:
-        top_grafico = resumo.head(15).reset_index()
-        if len(resumo) > 15:
-            st.caption(f"Gráfico mostra as 15 maiores de {len(resumo)} — tabela ao lado tem todas.")
-        st.altair_chart(grafico_meta_realizado(top_grafico, "Dimensao"), width="stretch")
-    with col_f:
-        st.dataframe(
-            resumo.style.format(
-                {"Meta_Valor": "R$ {:,.0f}", "Valor_Realizado": "R$ {:,.0f}", "Cob_Meta": "{:.1%}"}
-            ),
-            width="stretch",
-        )
+    with card("fatmeta-dimensao"):
+        col_e, col_f = st.columns([2, 1])
+        with col_e:
+            top_grafico = resumo.head(15).reset_index()
+            if len(resumo) > 15:
+                st.caption(
+                    f"Gráfico mostra as 15 maiores de {len(resumo)} — tabela ao lado tem todas."
+                )
+            st.altair_chart(grafico_meta_realizado(top_grafico, "Dimensao"), width="stretch")
+        with col_f:
+            st.dataframe(
+                resumo.style.format(
+                    {
+                        "Meta_Valor": "R$ {:,.0f}",
+                        "Valor_Realizado": "R$ {:,.0f}",
+                        "Cob_Meta": "{:.1%}",
+                    }
+                ),
+                width="stretch",
+            )
 
     with st.expander("Detalhe mês a mês"):
-        st.dataframe(
-            df_dim.assign(
-                Cob_Meta=lambda d: (d["Valor_Realizado"] / d["Meta_Valor"]).where(
-                    d["Meta_Valor"] > 0
-                )
-            )[
-                [
-                    "Mes",
-                    "Dimensao",
-                    "Meta_Valor",
-                    "Valor_Realizado",
-                    "Cob_Meta",
-                    "Meta_Unidades",
-                    "Unidades_Realizado",
-                ]
-            ],
-            width="stretch",
-            hide_index=True,
-        )
+        with card("fatmeta-dimensao-detalhe"):
+            st.dataframe(
+                df_dim.assign(
+                    Cob_Meta=lambda d: (d["Valor_Realizado"] / d["Meta_Valor"]).where(
+                        d["Meta_Valor"] > 0
+                    )
+                )[
+                    [
+                        "Mes",
+                        "Dimensao",
+                        "Meta_Valor",
+                        "Valor_Realizado",
+                        "Cob_Meta",
+                        "Meta_Unidades",
+                        "Unidades_Realizado",
+                    ]
+                ],
+                width="stretch",
+                hide_index=True,
+            )

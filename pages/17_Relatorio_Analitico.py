@@ -24,11 +24,12 @@ from scripts.query_faturamento_comercial import (  # noqa: E402
     relatorio_analitico,
 )
 from scripts.ui_filtros_comercial import render_filtros_comercial  # noqa: E402
+from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(
     page_title="Relatório Analítico — Vendas Comercial", page_icon="🔬", layout="wide"
 )
-st.title("🔬 Relatório Analítico")
+st.title(":material/query_stats: Relatório Analítico")
 st.caption(
     "Fonte: `GOLD.vendas_sap.fct_faturamento_itens_sap` — mesma fonte/caveat de "
     "**Faturamento vs Meta**, ver `docs/CONTEXTO_VENDAS_SAP.md` §10. Detalhe linha a linha "
@@ -107,4 +108,5 @@ else:
         if "Qtd Faturada" in df.columns:
             formato["Qtd Faturada"] = "{:,.0f}"
 
-        st.dataframe(df.style.format(formato), width="stretch", hide_index=True)
+        with card("relatorio-analitico-detalhe"):
+            st.dataframe(df.style.format(formato), width="stretch", hide_index=True)

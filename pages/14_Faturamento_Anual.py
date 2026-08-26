@@ -22,9 +22,10 @@ from scripts.query_faturamento_comercial import (  # noqa: E402
     top_clientes_periodo,
 )
 from scripts.ui_filtros_comercial import render_filtros_comercial  # noqa: E402
+from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Faturamento Anual — Vendas Comercial", page_icon="📆", layout="wide")
-st.title("📆 Faturamento Anual — Comparativo YoY")
+st.title(":material/calendar_month: Faturamento Anual — Comparativo YoY")
 st.caption(
     "Fonte: `GOLD.vendas_sap.fct_faturamento_itens_sap` — mesma fonte/caveat de "
     "**Faturamento vs Meta**, ver `docs/CONTEXTO_VENDAS_SAP.md` §10. Compara o ano corrente "
@@ -63,34 +64,36 @@ else:
 
     st.divider()
 
-    col_a, col_b = st.columns([2, 1])
-    with col_a:
-        st.subheader(f"{dimensao}: YTD ano anterior x YTD ano corrente")
-        st.bar_chart(df.set_index("Dimensao")[[col_ytd_anterior, col_ytd_atual]].head(20))
-    with col_b:
-        st.subheader("Maiores altas/quedas (YTD)")
-        top_evolucao = df.dropna(subset=["Evolucao_YTD_Pct"]).sort_values(
-            "Evolucao_YTD_Pct", ascending=False
-        )
-        st.dataframe(
-            top_evolucao[["Dimensao", "Evolucao_YTD_Pct"]].style.format(
-                {"Evolucao_YTD_Pct": "{:+.1%}"}
-            ),
-            width="stretch",
-            hide_index=True,
-        )
+    with card("fatanual-comparativo"):
+        col_a, col_b = st.columns([2, 1])
+        with col_a:
+            st.subheader(f"{dimensao}: YTD ano anterior x YTD ano corrente")
+            st.bar_chart(df.set_index("Dimensao")[[col_ytd_anterior, col_ytd_atual]].head(20))
+        with col_b:
+            st.subheader("Maiores altas/quedas (YTD)")
+            top_evolucao = df.dropna(subset=["Evolucao_YTD_Pct"]).sort_values(
+                "Evolucao_YTD_Pct", ascending=False
+            )
+            st.dataframe(
+                top_evolucao[["Dimensao", "Evolucao_YTD_Pct"]].style.format(
+                    {"Evolucao_YTD_Pct": "{:+.1%}"}
+                ),
+                width="stretch",
+                hide_index=True,
+            )
 
     st.divider()
 
     st.subheader("Detalhe")
-    st.dataframe(
-        df.style.format(
-            {col: "R$ {:,.2f}" for col in [df.columns[1], col_ytd_anterior, col_ytd_atual]}
-            | {"Evolucao_YTD_Pct": "{:+.1%}"}
-        ),
-        width="stretch",
-        hide_index=True,
-    )
+    with card("fatanual-detalhe"):
+        st.dataframe(
+            df.style.format(
+                {col: "R$ {:,.2f}" for col in [df.columns[1], col_ytd_anterior, col_ytd_atual]}
+                | {"Evolucao_YTD_Pct": "{:+.1%}"}
+            ),
+            width="stretch",
+            hide_index=True,
+        )
 
 st.divider()
 
@@ -109,10 +112,15 @@ df_clientes = _top_clientes_cached(n_clientes, filtros)
 if df_clientes.empty:
     st.info("Nada encontrado.")
 else:
-    st.dataframe(
-        df_clientes.style.format(
-            {"Valor_Faturado": "R$ {:,.2f}", "Qtd_Faturada": "{:,.0f}", "Preco_Medio": "R$ {:,.2f}"}
-        ),
-        width="stretch",
-        hide_index=True,
-    )
+    with card("fatanual-top-clientes"):
+        st.dataframe(
+            df_clientes.style.format(
+                {
+                    "Valor_Faturado": "R$ {:,.2f}",
+                    "Qtd_Faturada": "{:,.0f}",
+                    "Preco_Medio": "R$ {:,.2f}",
+                }
+            ),
+            width="stretch",
+            hide_index=True,
+        )

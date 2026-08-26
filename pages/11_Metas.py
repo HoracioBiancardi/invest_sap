@@ -19,9 +19,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.query_vendas_sap import meta_vs_realizado_mensal  # noqa: E402
 from scripts.ui_charts_comercial import grafico_meta_realizado  # noqa: E402
+from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Meta x Realizado — Vendas SAP", page_icon="🎯", layout="wide")
-st.title("🎯 Meta x Realizado")
+st.title(":material/track_changes: Meta x Realizado")
 st.caption(
     "Meta vem de `vendas.fat_meta_equipe` — planejamento comercial (SharePoint, mês x "
     "setor x material), não existe (nem pode existir) fonte SAP/Salesforce equivalente: "
@@ -79,48 +80,51 @@ else:
         comparacao = (
             df_com_meta.groupby("Mes")[["Meta_Valor", "Valor_Realizado"]].sum().reset_index()
         )
-        st.altair_chart(grafico_meta_realizado(comparacao, "Mes"), width="stretch")
+        with card("metas-mensal"):
+            st.altair_chart(grafico_meta_realizado(comparacao, "Mes"), width="stretch")
 
     st.divider()
 
     st.subheader("Atingimento por BU (R$, soma do período)")
     por_bu = df_com_meta.groupby("BU")[["Meta_Valor", "Valor_Realizado"]].sum().reset_index()
     por_bu = por_bu.sort_values("Valor_Realizado", ascending=False)
-    col_bu_a, col_bu_b = st.columns([2, 1])
-    with col_bu_a:
-        st.altair_chart(grafico_meta_realizado(por_bu, "BU"), width="stretch")
-    with col_bu_b:
-        st.dataframe(
-            por_bu.assign(
-                Atingimento=lambda d: (d["Valor_Realizado"] / d["Meta_Valor"]).where(
-                    d["Meta_Valor"] > 0
-                )
-            ).style.format(
-                {
-                    "Meta_Valor": "R$ {:,.0f}",
-                    "Valor_Realizado": "R$ {:,.0f}",
-                    "Atingimento": "{:.1%}",
-                }
-            ),
-            width="stretch",
-            hide_index=True,
-        )
+    with card("metas-por-bu"):
+        col_bu_a, col_bu_b = st.columns([2, 1])
+        with col_bu_a:
+            st.altair_chart(grafico_meta_realizado(por_bu, "BU"), width="stretch")
+        with col_bu_b:
+            st.dataframe(
+                por_bu.assign(
+                    Atingimento=lambda d: (d["Valor_Realizado"] / d["Meta_Valor"]).where(
+                        d["Meta_Valor"] > 0
+                    )
+                ).style.format(
+                    {
+                        "Meta_Valor": "R$ {:,.0f}",
+                        "Valor_Realizado": "R$ {:,.0f}",
+                        "Atingimento": "{:.1%}",
+                    }
+                ),
+                width="stretch",
+                hide_index=True,
+            )
 
     st.divider()
 
     st.subheader("Detalhe mensal")
-    st.dataframe(
-        df[
-            [
-                "Mes",
-                "BU",
-                "Meta_Valor",
-                "Valor_Realizado",
-                "Atingimento",
-                "Meta_Unidades",
-                "Unidades_Realizado",
-            ]
-        ],
-        width="stretch",
-        hide_index=True,
-    )
+    with card("metas-detalhe"):
+        st.dataframe(
+            df[
+                [
+                    "Mes",
+                    "BU",
+                    "Meta_Valor",
+                    "Valor_Realizado",
+                    "Atingimento",
+                    "Meta_Unidades",
+                    "Unidades_Realizado",
+                ]
+            ],
+            width="stretch",
+            hide_index=True,
+        )

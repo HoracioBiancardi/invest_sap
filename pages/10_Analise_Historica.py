@@ -20,9 +20,10 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.query_vendas_sap import devolucoes_mensal, faturamento_mensal, pedidos_mensal  # noqa: E402
+from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Análise Histórica — Vendas SAP", page_icon="📈", layout="wide")
-st.title("📈 Análise Histórica")
+st.title(":material/trending_up: Análise Histórica")
 st.caption(
     "Faturamento, pedidos entrando no funil e devoluções/abatimentos, mês a mês — as 3 "
     "únicas séries com data real de transação nesta base. Backlog e estoque **não têm "
@@ -67,7 +68,8 @@ else:
     c1.metric("Últimos 12 meses", f"R$ {atual:,.0f}")
     c2.metric("12 meses anteriores", f"R$ {anterior:,.0f}")
     c3.metric("Variação", f"{variacao:+.1%}")
-    st.bar_chart(df_fat.set_index("Mes")["Valor_Faturado"])
+    with card("historico-faturamento"):
+        st.bar_chart(df_fat.set_index("Mes")["Valor_Faturado"])
 
 st.divider()
 
@@ -82,7 +84,8 @@ else:
     c1.metric("Últimos 12 meses", f"R$ {atual:,.0f}")
     c2.metric("12 meses anteriores", f"R$ {anterior:,.0f}")
     c3.metric("Variação", f"{variacao:+.1%}")
-    st.bar_chart(df_ped.set_index("Mes")["Valor_Pedido"])
+    with card("historico-pedidos"):
+        st.bar_chart(df_ped.set_index("Mes")["Valor_Pedido"])
 
 st.divider()
 
@@ -97,7 +100,8 @@ if not df_fat.empty and not df_ped.empty:
     comparacao = pd.merge(
         df_fat[["Mes", "Valor_Faturado"]], df_ped[["Mes", "Valor_Pedido"]], on="Mes", how="outer"
     ).fillna(0).set_index("Mes").sort_index()
-    st.bar_chart(comparacao)
+    with card("historico-comparacao"):
+        st.bar_chart(comparacao)
 
 st.divider()
 
@@ -112,4 +116,5 @@ else:
     c1.metric("Últimos 12 meses", f"R$ {atual:,.0f}")
     c2.metric("12 meses anteriores", f"R$ {anterior:,.0f}")
     c3.metric("Variação", f"{variacao:+.1%}")
-    st.bar_chart(df_dev.set_index("Mes")["Valor"])
+    with card("historico-devolucoes"):
+        st.bar_chart(df_dev.set_index("Mes")["Valor"])

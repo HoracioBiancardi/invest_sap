@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.db import get_hana_connection, get_sqlserver_engine  # noqa: E402
 
 st.set_page_config(page_title="Conectividade — Vendas SAP", page_icon="🔌", layout="wide")
-st.title("🔌 Conectividade")
+st.title(":material/cable: Conectividade")
 st.caption("Testa a conexão com SQL Server (BRONZE/SILVER/GOLD) e SAP HANA/Datasphere usando as credenciais do `.env`.")
 
 if st.button("Verificar conexões", type="primary"):

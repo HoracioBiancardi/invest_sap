@@ -23,11 +23,12 @@ from scripts.query_faturamento_comercial import (  # noqa: E402
     faturamento_serie,
 )
 from scripts.ui_filtros_comercial import render_filtros_comercial  # noqa: E402
+from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(
     page_title="Faturamento Diário — Vendas Comercial", page_icon="📅", layout="wide"
 )
-st.title("📅 Faturamento Diário — Mês Atual")
+st.title(":material/calendar_today: Faturamento Diário — Mês Atual")
 st.caption(
     "Fonte: `GOLD.vendas_sap.fct_faturamento_itens_sap` — mesma fonte/caveat de "
     "**Faturamento vs Meta**, ver `docs/CONTEXTO_VENDAS_SAP.md` §10. Sempre olha o mês "

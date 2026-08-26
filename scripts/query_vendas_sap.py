@@ -1160,6 +1160,126 @@ def devolucoes_mensal(meses: int = 24, excluir_faturamento_rotina: bool = True) 
     return read_sql(query, database="GOLD", params={"meses_neg": -abs(int(meses))})
 
 
+def _vendedor_join_sql(alias_fato: str = "f") -> str:
+    """LEFT JOIN pra resolver `Codigo_Vendedor` -> nome/metadado, via `dim_vendedor_sf`.
+
+    Só casa quando `Origem_Vendedor = 'SALESFORCE'` — a origem SAP (`VBPA.PARVW='VE'`)
+    está sempre vazia em produção (0 de milhões de linhas, confirmado ao vivo 2026-08-25),
+    então nunca existe `Codigo_Vendedor` de origem SAP pra resolver, e comparar um código
+    SAP (KUNNR) contra a chave Salesforce de `dim_vendedor_sf` seria comparar domínios
+    incompatíveis por acaso. Cobertura real medida ao vivo (últimos 12 meses, 2026-08-26):
+    ~82% dos itens de `fct_faturamento_itens_sap` têm `Origem_Vendedor = 'SALESFORCE'`
+    (o resto é NULL, sem vendedor identificado em nenhuma fonte) — e desses, **100%** batem
+    com `dim_vendedor_sf` (327 vendedores cadastrados, `Nome_Vendedor_SF` sempre
+    preenchido). Metadado extra da dimensão (`Unidade_Negocio`, `Regiao`, `Divisao`,
+    `Setor`) é bem mais raso — só ~25% preenchido — não confiar nele pra segmentação.
+    """
+    return f"""
+        LEFT JOIN {SCHEMA}.dim_vendedor_sf v
+            ON {alias_fato}.Origem_Vendedor = 'SALESFORCE'
+            AND {alias_fato}.Codigo_Vendedor = v.Codigo_Vendedor_SF
+    """
+
+
+def faturamento_por_vendedor(
+    data_inicio: Optional[date] = None,
+    data_fim: Optional[date] = None,
+    tipo_cliente: Optional[str] = None,
+) -> pd.DataFrame:
+    """Faturamento agregado por vendedor (`Codigo_Vendedor` em `fct_faturamento_itens_sap`).
+
+    Nome vem de `dim_vendedor_sf` — ver `_vendedor_join_sql` pro porquê de casar só
+    `Origem_Vendedor = 'SALESFORCE'` e pra cobertura real medida (~82% dos itens com
+    vendedor identificado, 100% desses com nome resolvido). Item sem `Codigo_Vendedor`
+    (ou com origem que não é Salesforce) cai em **'Sem Vendedor Identificado'** — não é
+    descartado, é uma fatia real e esperada do faturamento, do mesmo jeito que outras
+    páginas usam 'NAO ALOCADO'.
+
+    Args:
+        data_inicio, data_fim: período de `Data_Faturamento`. Se algum for None, usa o
+            default (mês corrente até hoje).
+        tipo_cliente: "Governo" ou "Privado" (None = os dois).
+    """
+    if data_fim is None:
+        data_fim = date.today()
+    if data_inicio is None:
+        data_inicio = data_fim.replace(day=1)
+
+    join_tipo, condicao_tipo = _condicao_tipo_cliente_por_codigo(tipo_cliente, "f.Codigo_Cliente")
+    query = f"""
+        SELECT
+            COALESCE(f.Codigo_Vendedor, 'SEM_VENDEDOR') AS Codigo_Vendedor,
+            COALESCE(MAX(v.Nome_Vendedor_SF), 'Sem Vendedor Identificado') AS Nome_Vendedor,
+            MAX(v.Unidade_Negocio) AS Unidade_Negocio,
+            MAX(v.Regiao) AS Regiao,
+            SUM(f.Valor_Liquido_Faturamento) AS Valor_Faturado,
+            SUM(f.Qtd_Faturada) AS Qtd_Faturada,
+            COUNT(DISTINCT f.Codigo_Cliente) AS Qtd_Clientes,
+            COUNT(*) AS Qtd_Itens
+        FROM {SCHEMA}.fct_faturamento_itens_sap f
+        {_vendedor_join_sql("f")}
+        {join_tipo}
+        WHERE f.Data_Faturamento BETWEEN :data_inicio AND :data_fim{condicao_tipo}
+        GROUP BY COALESCE(f.Codigo_Vendedor, 'SEM_VENDEDOR')
+        ORDER BY Valor_Faturado DESC
+    """  # nosec B608
+    return read_sql(query, database="GOLD", params={"data_inicio": data_inicio, "data_fim": data_fim})
+
+
+def faturamento_vendedor_mensal(codigo_vendedor: str, meses: int = 12) -> pd.DataFrame:
+    """Evolução mensal de faturamento de 1 vendedor específico (`Codigo_Vendedor`).
+
+    Mesma fonte/histórico de `faturamento_mensal()`, filtrado a 1 vendedor — pra drill-down
+    de tendência individual em `pages/18_Visao_Vendedor.py`.
+    """
+    query = f"""
+        SELECT
+            FORMAT(f.Data_Faturamento, 'yyyy-MM') AS Mes,
+            SUM(f.Valor_Liquido_Faturamento) AS Valor_Faturado,
+            SUM(f.Qtd_Faturada) AS Qtd_Faturada,
+            COUNT(DISTINCT f.Codigo_Cliente) AS Qtd_Clientes
+        FROM {SCHEMA}.fct_faturamento_itens_sap f
+        WHERE f.Codigo_Vendedor = :codigo_vendedor
+            AND f.Data_Faturamento >= DATEADD(month, :meses_neg, CAST(GETDATE() AS date))
+            AND f.Data_Faturamento <= CAST(GETDATE() AS date)
+        GROUP BY FORMAT(f.Data_Faturamento, 'yyyy-MM')
+        ORDER BY Mes
+    """  # nosec B608
+    return read_sql(
+        query,
+        database="GOLD",
+        params={"codigo_vendedor": codigo_vendedor, "meses_neg": -abs(int(meses))},
+    )
+
+
+def top_clientes_por_vendedor(
+    codigo_vendedor: str,
+    data_inicio: date,
+    data_fim: date,
+    n: int = 15,
+) -> pd.DataFrame:
+    """Top N clientes faturados por 1 vendedor específico, no período."""
+    query = f"""
+        SELECT TOP {int(n)}
+            f.Codigo_Cliente,
+            MAX(cl.Nome_Cliente) AS Nome_Cliente,
+            SUM(f.Valor_Liquido_Faturamento) AS Valor_Faturado,
+            SUM(f.Qtd_Faturada) AS Qtd_Faturada
+        FROM {SCHEMA}.fct_faturamento_itens_sap f
+        LEFT JOIN (SELECT DISTINCT Codigo_Cliente, Nome_Cliente FROM {SCHEMA}.dim_cliente_sap) cl
+            ON f.Codigo_Cliente = cl.Codigo_Cliente
+        WHERE f.Codigo_Vendedor = :codigo_vendedor
+            AND f.Data_Faturamento BETWEEN :data_inicio AND :data_fim
+        GROUP BY f.Codigo_Cliente
+        ORDER BY Valor_Faturado DESC
+    """  # nosec B608
+    return read_sql(
+        query,
+        database="GOLD",
+        params={"codigo_vendedor": codigo_vendedor, "data_inicio": data_inicio, "data_fim": data_fim},
+    )
+
+
 if __name__ == "__main__":
     print("Aging do backlog aberto:")
     print(aging_pendencias().to_string(index=False))

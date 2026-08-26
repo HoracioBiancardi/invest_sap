@@ -10,9 +10,10 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.ddic_lookup import campos_tabela, descricao_tabela  # noqa: E402
+from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="DDIC Lookup — Vendas SAP", page_icon="📖", layout="wide")
-st.title("📖 DDIC Lookup")
+st.title(":material/menu_book: DDIC Lookup")
 st.caption("O que é uma tabela/campo SAP, direto do dicionário de dados (`DD02T`/`DD03L`/`DD04T` via HANA).")
 
 col1, col2 = st.columns([2, 2])
@@ -37,6 +38,7 @@ if tabela:
     if campos.empty:
         st.info("Nenhum campo encontrado.")
     else:
-        st.dataframe(campos, width="stretch", hide_index=True)
+        with card("ddic-campos"):
+            st.dataframe(campos, width="stretch", hide_index=True)
 else:
     st.caption("Digite o nome de uma tabela SAP (ex.: VBAK) para começar.")

@@ -21,9 +21,10 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.query_vendas_sap import pedidos_mensal, pedidos_por_cliente  # noqa: E402
+from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Relatório de Pedidos — Vendas SAP", page_icon="🧾", layout="wide")
-st.title("🧾 Relatório de Pedidos")
+st.title(":material/receipt_long: Relatório de Pedidos")
 st.caption(
     "Fonte: `GOLD.vendas_sap.fct_vendas_itens_sap` (Data_Inclusao_Pedido — pedido entrando "
     "no funil, não é o mesmo que faturamento). Ver **Análise Histórica** para a tendência "
@@ -68,13 +69,14 @@ else:
 
     st.divider()
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.subheader("Quantidade mensal de pedidos")
-        st.bar_chart(df_mensal.set_index("Mes")["Qtd_Pedidos"])
-    with col_b:
-        st.subheader("Valor médio de pedido — mensal")
-        st.bar_chart(df_mensal.set_index("Mes")["Valor_Medio_Pedido"])
+    with card("pedidos-mensal"):
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.subheader("Quantidade mensal de pedidos")
+            st.bar_chart(df_mensal.set_index("Mes")["Qtd_Pedidos"])
+        with col_b:
+            st.subheader("Valor médio de pedido — mensal")
+            st.bar_chart(df_mensal.set_index("Mes")["Valor_Medio_Pedido"])
 
 st.divider()
 
@@ -85,15 +87,16 @@ df_clientes = _pedidos_cliente_cached(data_inicio, hoje, n_clientes, tipo_client
 if df_clientes.empty:
     st.info("Nada encontrado para esse período/filtro.")
 else:
-    st.dataframe(
-        df_clientes.style.format(
-            {
-                "Qtd_Pedidos": "{:,.0f}",
-                "Qtd_Itens_Total": "{:,.0f}",
-                "Media_Itens_Pedido": "{:,.2f}",
-                "Valor_Medio_Pedido": "R$ {:,.2f}",
-            }
-        ),
-        width="stretch",
-        hide_index=True,
-    )
+    with card("pedidos-ranking-clientes"):
+        st.dataframe(
+            df_clientes.style.format(
+                {
+                    "Qtd_Pedidos": "{:,.0f}",
+                    "Qtd_Itens_Total": "{:,.0f}",
+                    "Media_Itens_Pedido": "{:,.2f}",
+                    "Valor_Medio_Pedido": "R$ {:,.2f}",
+                }
+            ),
+            width="stretch",
+            hide_index=True,
+        )

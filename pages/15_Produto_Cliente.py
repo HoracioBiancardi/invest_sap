@@ -23,9 +23,10 @@ from scripts.query_faturamento_comercial import (  # noqa: E402
     skus_ativos_periodo,
 )
 from scripts.ui_filtros_comercial import render_filtros_comercial  # noqa: E402
+from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Produto | Cliente — Vendas Comercial", page_icon="🧪", layout="wide")
-st.title("🧪 Visão Produto | Cliente")
+st.title(":material/category: Visão Produto | Cliente")
 st.caption(
     "Fonte: `GOLD.vendas_sap.fct_faturamento_itens_sap` — mesma fonte/caveat de "
     "**Faturamento vs Meta**, ver `docs/CONTEXTO_VENDAS_SAP.md` §10. **Família** vem de "
@@ -91,23 +92,24 @@ c3.metric("Média clientes atendidos/mês", f"{media_clientes:,.0f}")
 
 st.divider()
 
-col_a, col_b = st.columns([2, 1])
-with col_a:
-    st.subheader("Faturamento Bruto e Preço Médio por mês")
-    if df_mes.empty:
-        st.info("Sem dado no período.")
-    else:
-        df_preco = df_mes.assign(
-            Preco_Medio=lambda d: d["Valor_Faturado"] / d["Qtd_Faturada"].replace(0, pd.NA)
-        )
-        st.bar_chart(df_preco.set_index("Mes")["Valor_Faturado"])
-        st.line_chart(df_preco.set_index("Mes")["Preco_Medio"])
-with col_b:
-    st.subheader("SKUs vendidos por mês")
-    if df_skus.empty:
-        st.info("Sem dado no período.")
-    else:
-        st.bar_chart(df_skus.set_index("Mes")["Qtd_SKUs_Vendidos"])
+with card("produto-cliente-evolucao"):
+    col_a, col_b = st.columns([2, 1])
+    with col_a:
+        st.subheader("Faturamento Bruto e Preço Médio por mês")
+        if df_mes.empty:
+            st.info("Sem dado no período.")
+        else:
+            df_preco = df_mes.assign(
+                Preco_Medio=lambda d: d["Valor_Faturado"] / d["Qtd_Faturada"].replace(0, pd.NA)
+            )
+            st.bar_chart(df_preco.set_index("Mes")["Valor_Faturado"])
+            st.line_chart(df_preco.set_index("Mes")["Preco_Medio"])
+    with col_b:
+        st.subheader("SKUs vendidos por mês")
+        if df_skus.empty:
+            st.info("Sem dado no período.")
+        else:
+            st.bar_chart(df_skus.set_index("Mes")["Qtd_SKUs_Vendidos"])
 
 st.divider()
 
@@ -131,7 +133,8 @@ else:
         index="Dimensao", columns="Mes", values="Valor_Faturado", aggfunc="sum", fill_value=0
     )
     pivot = pivot.reindex(top_dimensoes)
-    st.dataframe(pivot.style.format("R$ {:,.0f}"), width="stretch")
+    with card("produto-cliente-ranking-mensal"):
+        st.dataframe(pivot.style.format("R$ {:,.0f}"), width="stretch")
 
     st.markdown("**Média dos últimos 6 meses (dentro da janela selecionada)**")
     ultimos_6_meses = sorted(df_dim_mes["Mes"].unique())[-6:]
@@ -145,7 +148,8 @@ else:
         .sort_values("Fatur_Bruto_Medio", ascending=False)
         .head(top_n)
     )
-    st.dataframe(
-        media_6m.style.format({"Fatur_Bruto_Medio": "R$ {:,.2f}"}),
-        width="stretch",
-    )
+    with card("produto-cliente-media-6m"):
+        st.dataframe(
+            media_6m.style.format({"Fatur_Bruto_Medio": "R$ {:,.2f}"}),
+            width="stretch",
+        )

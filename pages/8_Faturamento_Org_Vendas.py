@@ -17,9 +17,10 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.query_vendas_sap import faturamento_por_org_vendas_linha_negocio  # noqa: E402
+from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Faturamento por Org Vendas — Vendas SAP", page_icon="🏢", layout="wide")
-st.title("🏢 Faturamento: Organização de Vendas x Linha de Negócio")
+st.title(":material/corporate_fare: Faturamento: Organização de Vendas x Linha de Negócio")
 st.caption(
     "Organização de Vendas é o campo SAP (VKORG) — quem faturou. Linha de Negócio "
     "(AESTHETICS / AESTHETICS BLAU-BRG / FARMA / ONCO-HEMATO / NÃO ALOCADO) vem em 2 "
@@ -59,13 +60,14 @@ else:
 
     st.divider()
 
-    col_a, col_b = st.columns([1, 1])
-    with col_a:
-        st.subheader("Por Organização de Vendas")
-        st.bar_chart(df.groupby("Descricao_Org_Vendas")["Valor_Faturado"].sum())
-    with col_b:
-        st.subheader("Por Linha de Negócio")
-        st.bar_chart(df.groupby("Linha_Negocio")["Valor_Faturado"].sum())
+    with card("fatorg-por-dimensao"):
+        col_a, col_b = st.columns([1, 1])
+        with col_a:
+            st.subheader("Por Organização de Vendas")
+            st.bar_chart(df.groupby("Descricao_Org_Vendas")["Valor_Faturado"].sum())
+        with col_b:
+            st.subheader("Por Linha de Negócio")
+            st.bar_chart(df.groupby("Linha_Negocio")["Valor_Faturado"].sum())
 
     st.divider()
 
@@ -73,23 +75,25 @@ else:
     matriz = df.pivot_table(
         index="Descricao_Org_Vendas", columns="Linha_Negocio", values="Valor_Faturado", aggfunc="sum", fill_value=0
     )
-    st.dataframe(matriz.style.format("R$ {:,.2f}"), width="stretch")
+    with card("fatorg-matriz"):
+        st.dataframe(matriz.style.format("R$ {:,.2f}"), width="stretch")
 
     st.divider()
 
     st.subheader("Detalhe")
-    st.dataframe(
-        df[
-            [
-                "Codigo_Org_Vendas",
-                "Descricao_Org_Vendas",
-                "Linha_Negocio",
-                "Origem_Linha_Negocio",
-                "Valor_Faturado",
-                "Qtd_Faturada",
-                "Qtd_Itens",
-            ]
-        ],
-        width="stretch",
-        hide_index=True,
-    )
+    with card("fatorg-detalhe"):
+        st.dataframe(
+            df[
+                [
+                    "Codigo_Org_Vendas",
+                    "Descricao_Org_Vendas",
+                    "Linha_Negocio",
+                    "Origem_Linha_Negocio",
+                    "Valor_Faturado",
+                    "Qtd_Faturada",
+                    "Qtd_Itens",
+                ]
+            ],
+            width="stretch",
+            hide_index=True,
+        )

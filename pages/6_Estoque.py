@@ -20,9 +20,10 @@ from scripts.query_vendas_sap import (  # noqa: E402
     estoque_validade,
     estoque_validade_resumo,
 )
+from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Estoque — Vendas SAP", page_icon="📦", layout="wide")
-st.title("📦 Estoque")
+st.title(":material/inventory_2: Estoque")
 st.caption(
     "Fonte: `GOLD.vendas_sap.fct_estoque_lote_sap`. O filtro global do sidebar não se "
     "aplica aqui — estoque é uma foto de agora, sem dimensão de cliente/data."
@@ -136,26 +137,35 @@ with tab_restrito:
 
         st.divider()
 
-        col_a, col_b = st.columns([1, 1])
-        with col_a:
-            st.subheader("Disponível x Qualidade x Bloqueado, por Centro")
-            resumo_centro = df.groupby("Nome_Centro")[["Qtd_Disponivel_Venda", "Qtd_Qualidade", "Qtd_Bloqueado"]].sum()
-            st.bar_chart(resumo_centro)
-        with col_b:
-            st.subheader(f"Top materiais por valor financeiro em estoque ({moeda_label})")
-            top_material = df_valor.nlargest(15, "Valor_Financeiro_Estoque").set_index("Descricao_Material")[
-                "Valor_Financeiro_Estoque"
-            ]
-            st.bar_chart(top_material)
+        with card("estoque-centro"):
+            col_a, col_b = st.columns([1, 1])
+            with col_a:
+                st.subheader("Disponível x Qualidade x Bloqueado, por Centro")
+                resumo_centro = df.groupby("Nome_Centro")[
+                    ["Qtd_Disponivel_Venda", "Qtd_Qualidade", "Qtd_Bloqueado"]
+                ].sum()
+                st.bar_chart(resumo_centro)
+            with col_b:
+                st.subheader(f"Top materiais por valor financeiro em estoque ({moeda_label})")
+                top_material = df_valor.nlargest(15, "Valor_Financeiro_Estoque").set_index(
+                    "Descricao_Material"
+                )["Valor_Financeiro_Estoque"]
+                st.bar_chart(top_material)
 
         st.subheader("Acabado x Não Acabado")
         resumo_acabado = df.groupby("Produto_Acabado")[["Qtd_Disponivel_Venda", "Qtd_Qualidade", "Qtd_Bloqueado"]].sum()
         resumo_acabado_valor = df_valor.groupby("Produto_Acabado")["Valor_Financeiro_Estoque"].sum()
-        col_e, col_f = st.columns([1, 1])
-        with col_e:
-            st.bar_chart(resumo_acabado)
-        with col_f:
-            st.dataframe(resumo_acabado_valor.to_frame().style.format({"Valor_Financeiro_Estoque": f"{moeda_label} {{:,.2f}}"}), width="stretch")
+        with card("estoque-acabado"):
+            col_e, col_f = st.columns([1, 1])
+            with col_e:
+                st.bar_chart(resumo_acabado)
+            with col_f:
+                st.dataframe(
+                    resumo_acabado_valor.to_frame().style.format(
+                        {"Valor_Financeiro_Estoque": f"{moeda_label} {{:,.2f}}"}
+                    ),
+                    width="stretch",
+                )
 
         st.subheader("Status do Material")
         st.caption(
@@ -165,11 +175,17 @@ with tab_restrito:
         )
         resumo_status = df.groupby("Status_Material")[["Qtd_Fisico_Total"]].sum()
         resumo_status_valor = df_valor.groupby("Status_Material")["Valor_Financeiro_Estoque"].sum()
-        col_i, col_j = st.columns([1, 1])
-        with col_i:
-            st.bar_chart(resumo_status)
-        with col_j:
-            st.dataframe(resumo_status_valor.to_frame().style.format({"Valor_Financeiro_Estoque": f"{moeda_label} {{:,.2f}}"}), width="stretch")
+        with card("estoque-status"):
+            col_i, col_j = st.columns([1, 1])
+            with col_i:
+                st.bar_chart(resumo_status)
+            with col_j:
+                st.dataframe(
+                    resumo_status_valor.to_frame().style.format(
+                        {"Valor_Financeiro_Estoque": f"{moeda_label} {{:,.2f}}"}
+                    ),
+                    width="stretch",
+                )
         if "MARCADO PARA EXCLUSAO" in resumo_status.index:
             qtd_exclusao = resumo_status.loc["MARCADO PARA EXCLUSAO", "Qtd_Fisico_Total"]
             st.warning(
@@ -183,10 +199,13 @@ with tab_restrito:
                 "Diferente de Qtd_Bloqueado (lote específico bloqueado): isso é o material "
                 "inteiro bloqueado no cadastro (ex.: pra suprimento/depósito ou roteiro)."
             )
-            st.dataframe(
-                df.groupby("Descricao_Status_Global_Material")["Qtd_Fisico_Total"].sum().sort_values(ascending=False),
-                width="stretch",
-            )
+            with card("estoque-bloqueio-material"):
+                st.dataframe(
+                    df.groupby("Descricao_Status_Global_Material")["Qtd_Fisico_Total"]
+                    .sum()
+                    .sort_values(ascending=False),
+                    width="stretch",
+                )
 
         st.divider()
 
@@ -198,7 +217,8 @@ with tab_restrito:
             "Qtd_Disponivel_Venda", "Qtd_Qualidade", "Qtd_Bloqueado",
             "Qtd_Transferencia", "Qtd_Reservada", "Qtd_Fisico_Total", "Valor_Financeiro_Estoque",
         ]
-        st.dataframe(df[colunas_exibir].head(linhas), width="stretch", hide_index=True)
+        with card("estoque-detalhe"):
+            st.dataframe(df[colunas_exibir].head(linhas), width="stretch", hide_index=True)
 
 with tab_validade:
     st.caption(
@@ -232,17 +252,22 @@ with tab_validade:
 
         st.divider()
 
-        col_g, col_h = st.columns([1, 1])
-        with col_g:
-            st.subheader("Valor por faixa de validade")
-            st.bar_chart(df_resumo["Valor_Financeiro_Estoque"])
-        with col_h:
-            st.dataframe(
-                df_resumo[["Qtd_Lotes", "Qtd_Fisico_Total", "Valor_Financeiro_Estoque"]].style.format(
-                    {"Valor_Financeiro_Estoque": f"{moeda_resumo} {{:,.2f}}", "Qtd_Lotes": "{:,.0f}", "Qtd_Fisico_Total": "{:,.0f}"}
-                ),
-                width="stretch",
-            )
+        with card("estoque-validade-faixa"):
+            col_g, col_h = st.columns([1, 1])
+            with col_g:
+                st.subheader("Valor por faixa de validade")
+                st.bar_chart(df_resumo["Valor_Financeiro_Estoque"])
+            with col_h:
+                st.dataframe(
+                    df_resumo[["Qtd_Lotes", "Qtd_Fisico_Total", "Valor_Financeiro_Estoque"]].style.format(
+                        {
+                            "Valor_Financeiro_Estoque": f"{moeda_resumo} {{:,.2f}}",
+                            "Qtd_Lotes": "{:,.0f}",
+                            "Qtd_Fisico_Total": "{:,.0f}",
+                        }
+                    ),
+                    width="stretch",
+                )
 
         st.divider()
 
@@ -255,4 +280,5 @@ with tab_validade:
             "Data_Producao", "Data_Validade", "Dias_Para_Vencer", "Faixa_Validade",
             "Qtd_Estoque_Fisico_Total", "Valor_Financeiro_Estoque",
         ]
-        st.dataframe(df_detalhe[colunas_validade].head(linhas), width="stretch", hide_index=True)
+        with card("estoque-validade-detalhe"):
+            st.dataframe(df_detalhe[colunas_validade].head(linhas), width="stretch", hide_index=True)

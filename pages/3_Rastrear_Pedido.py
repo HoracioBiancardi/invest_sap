@@ -15,9 +15,10 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.trace_pedido import trace_pedido  # noqa: E402
+from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Rastrear Pedido — Vendas SAP", page_icon="🧭", layout="wide")
-st.title("🧭 Rastrear Pedido")
+st.title(":material/manage_search: Rastrear Pedido")
 st.caption("SAP cru (HANA) → Gold `vendas_sap` → Salesforce (Opportunity/OpportunityLineItem), lado a lado.")
 
 col1, col2, col3 = st.columns([2, 1, 1])
@@ -37,7 +38,8 @@ if buscar and numero_pedido:
     for titulo, df in resultado.items():
         with st.expander(f"{titulo} ({len(df)} linha{'s' if len(df) != 1 else ''})", expanded=not df.empty):
             if isinstance(df, pd.DataFrame) and not df.empty:
-                st.dataframe(df, width="stretch", hide_index=True)
+                with card(f"rastrear-{titulo}"):
+                    st.dataframe(df, width="stretch", hide_index=True)
             else:
                 st.info("Nada encontrado.")
 elif not numero_pedido:

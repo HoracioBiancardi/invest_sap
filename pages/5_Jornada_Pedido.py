@@ -22,9 +22,10 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.query_vendas_sap import correlacao_oportunidade_pedido_pendencia_fatura  # noqa: E402
+from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Jornada do Pedido — Vendas SAP", page_icon="🔗", layout="wide")
-st.title("🔗 Jornada do Pedido: Oportunidade → Pedido → Pendência → Fatura")
+st.title(":material/route: Jornada do Pedido: Oportunidade → Pedido → Pendência → Fatura")
 st.caption(
     "Uma linha por Pedido+Item: valor da Oportunidade de origem (Salesforce), valor do "
     "pedido (SAP), quanto já foi faturado e quanto ainda está pendente. Cobertura de "
@@ -150,13 +151,14 @@ else:
     )
 
     with tab_geral:
-        col_a, col_b = st.columns([1, 1])
-        with col_a:
-            st.subheader("Por status de pendência")
-            st.bar_chart(df.groupby("Status_Pendencia")["Valor_Liquido_Pedido"].sum())
-        with col_b:
-            st.subheader("Por status de faturamento")
-            st.bar_chart(df.groupby("Status_Faturamento")["Valor_Liquido_Pedido"].sum())
+        with card("jornada-status"):
+            col_a, col_b = st.columns([1, 1])
+            with col_a:
+                st.subheader("Por status de pendência")
+                st.bar_chart(df.groupby("Status_Pendencia")["Valor_Liquido_Pedido"].sum())
+            with col_b:
+                st.subheader("Por status de faturamento")
+                st.bar_chart(df.groupby("Status_Faturamento")["Valor_Liquido_Pedido"].sum())
 
     with tab_governo:
         resumo_valor = df.groupby("Tipo_Cliente")[
@@ -165,15 +167,16 @@ else:
         resumo_qtd = df.groupby("Tipo_Cliente")[
             ["Qtd_Pedida", "Qtd_Pendente_Operacional", "Qtd_Faturada"]
         ].sum()
-        col_c, col_d = st.columns([1, 1])
-        with col_c:
-            st.markdown("**Valores (R$)**")
-            st.bar_chart(resumo_valor)
-            st.dataframe(resumo_valor.style.format("R$ {:,.2f}"), width="stretch")
-        with col_d:
-            st.markdown("**Quantidades**")
-            st.bar_chart(resumo_qtd)
-            st.dataframe(resumo_qtd.style.format("{:,.0f}"), width="stretch")
+        with card("jornada-governo-privado"):
+            col_c, col_d = st.columns([1, 1])
+            with col_c:
+                st.markdown("**Valores (R$)**")
+                st.bar_chart(resumo_valor)
+                st.dataframe(resumo_valor.style.format("R$ {:,.2f}"), width="stretch")
+            with col_d:
+                st.markdown("**Quantidades**")
+                st.bar_chart(resumo_qtd)
+                st.dataframe(resumo_qtd.style.format("{:,.0f}"), width="stretch")
 
     with tab_funil:
         st.caption(
@@ -194,11 +197,12 @@ else:
                 ],
             }
         ).set_index("Etapa")
-        col_e, col_f = st.columns([1, 1])
-        with col_e:
-            st.bar_chart(funil)
-        with col_f:
-            st.dataframe(funil, width="stretch")
+        with card("jornada-funil"):
+            col_e, col_f = st.columns([1, 1])
+            with col_e:
+                st.bar_chart(funil)
+            with col_f:
+                st.dataframe(funil, width="stretch")
 
         dt_criacao_opp = pd.to_datetime(df["Data_Criacao_Oportunidade"], utc=True, errors="coerce").dt.tz_localize(None)
         dt_pedido = pd.to_datetime(df["Data_Inclusao_Pedido"], errors="coerce")
@@ -246,18 +250,19 @@ else:
                 "Numero_Pedido", "Item_Pedido", "Nome_Cliente", "Nome_Oportunidade",
                 "Valor_Item_Oportunidade", "Valor_Liquido_Pedido", "Diferenca", "Diferenca_Pct",
             ]
-            st.dataframe(
-                df_div_filtrado[colunas_div].head(200).style.format(
-                    {
-                        "Valor_Item_Oportunidade": "R$ {:,.2f}",
-                        "Valor_Liquido_Pedido": "R$ {:,.2f}",
-                        "Diferenca": "R$ {:,.2f}",
-                        "Diferenca_Pct": "{:,.1f}%",
-                    }
-                ),
-                width="stretch",
-                hide_index=True,
-            )
+            with card("jornada-divergencia"):
+                st.dataframe(
+                    df_div_filtrado[colunas_div].head(200).style.format(
+                        {
+                            "Valor_Item_Oportunidade": "R$ {:,.2f}",
+                            "Valor_Liquido_Pedido": "R$ {:,.2f}",
+                            "Diferenca": "R$ {:,.2f}",
+                            "Diferenca_Pct": "{:,.1f}%",
+                        }
+                    ),
+                    width="stretch",
+                    hide_index=True,
+                )
 
     df_pend = df[df["Flag_Pendencia"] == 1]
 
@@ -279,11 +284,12 @@ else:
                 .unstack(fill_value=0)
                 .reindex(FAIXAS_AGING)
             )
-            col_i, col_j = st.columns([1, 1])
-            with col_i:
-                st.bar_chart(pivot_aging)
-            with col_j:
-                st.dataframe(pivot_aging.style.format("R$ {:,.2f}"), width="stretch")
+            with card("jornada-aging"):
+                col_i, col_j = st.columns([1, 1])
+                with col_i:
+                    st.bar_chart(pivot_aging)
+                with col_j:
+                    st.dataframe(pivot_aging.style.format("R$ {:,.2f}"), width="stretch")
 
     with tab_credito:
         st.caption(
@@ -303,14 +309,17 @@ else:
                 "Valor_Pendente_Faturamento"
             ].sum()
             st.metric("% do backlog pendente em cliente bloqueado", f"{pct_bloqueado:.1%}")
-            col_k, col_l = st.columns([1, 1])
-            with col_k:
-                st.bar_chart(resumo_credito["Valor_Pendente"])
-            with col_l:
-                st.dataframe(
-                    resumo_credito.style.format({"Valor_Pendente": "R$ {:,.2f}", "Qtd_Itens": "{:,.0f}"}),
-                    width="stretch",
-                )
+            with card("jornada-credito"):
+                col_k, col_l = st.columns([1, 1])
+                with col_k:
+                    st.bar_chart(resumo_credito["Valor_Pendente"])
+                with col_l:
+                    st.dataframe(
+                        resumo_credito.style.format(
+                            {"Valor_Pendente": "R$ {:,.2f}", "Qtd_Itens": "{:,.0f}"}
+                        ),
+                        width="stretch",
+                    )
 
     st.divider()
 
@@ -326,4 +335,5 @@ else:
         "Valor_Liquido_Pedido", "Valor_Liquido_Faturado", "Valor_Pendente_Faturamento",
         "Status_Faturamento", "Status_Pendencia",
     ]
-    st.dataframe(df_tabela[colunas_exibir], width="stretch", hide_index=True)
+    with card("jornada-detalhe"):
+        st.dataframe(df_tabela[colunas_exibir], width="stretch", hide_index=True)

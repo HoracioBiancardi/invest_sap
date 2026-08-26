@@ -36,14 +36,15 @@ from scripts.query_vendas_sap import (  # noqa: E402
     faturamento_mensal,
     pendencia_status_estoque,
 )
+from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Visão Executiva — Vendas", page_icon="🔎", layout="wide")
 
-st.title("🔎 Visão Executiva")
+st.title(":material/dashboard: Visão Executiva")
 st.caption(
     "Resumo geral pra decisão rápida — números ao vivo de `GOLD.vendas_sap` nas 2 seções "
-    "abaixo, mas com escopo diferente: **📊 Backlog e Operação** soma tudo sem recorte "
-    "comercial; **💰 Faturamento Comercial** passa pelo crosswalk cliente→setor (~52% de "
+    "abaixo, mas com escopo diferente: **Backlog e Operação** soma tudo sem recorte "
+    "comercial; **Faturamento Comercial** passa pelo crosswalk cliente→setor (~52% de "
     "cobertura) pra poder quebrar por Divisional/Regional/Distrital/Setor/Canal — ver "
     "`docs/CONTEXTO_VENDAS_SAP.md` §10. **As duas seções não são comparáveis 1:1** — cada "
     "uma soma o que já é comparável dentro dela mesma. Pra investigar o detalhe de qualquer "
@@ -136,17 +137,18 @@ valor_estoque_vencido = (
 )
 pct_estoque_vencido = (valor_estoque_vencido / valor_estoque_total) if valor_estoque_total else 0.0
 
-st.subheader("📊 Backlog e Operação (`vendas_sap`)")
+st.subheader("Backlog e Operação (`vendas_sap`)")
 st.caption("Situação do backlog aberto hoje.")
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Valor Pendente (Backlog)", f"R$ {valor_pendente_total:,.0f}")
-c2.metric("Faturado (mês corrente)", f"R$ {valor_faturado_mes_atual:,.0f}")
-c3.metric("Valor em Estoque", f"R$ {valor_estoque_total:,.0f}")
-c4.metric(
-    "Backlog com 60+ dias",
-    f"{pct_60mais:.0%}",
-    help="Fatia do valor pendente total que está aberta há mais de 60 dias.",
-)
+with st.container(border=True):
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Valor Pendente (Backlog)", f"R$ {valor_pendente_total:,.0f}")
+    c2.metric("Faturado (mês corrente)", f"R$ {valor_faturado_mes_atual:,.0f}")
+    c3.metric("Valor em Estoque", f"R$ {valor_estoque_total:,.0f}")
+    c4.metric(
+        "Backlog com 60+ dias",
+        f"{pct_60mais:.0%}",
+        help="Fatia do valor pendente total que está aberta há mais de 60 dias.",
+    )
 
 st.divider()
 
@@ -159,11 +161,12 @@ st.caption(
 if df_fat_mensal.empty:
     st.info("Sem dado de faturamento no período.")
 else:
-    st.bar_chart(df_fat_mensal.set_index("Mes")["Valor_Faturado"])
+    with card("home-faturamento-mensal"):
+        st.bar_chart(df_fat_mensal.set_index("Mes")["Valor_Faturado"])
 
 st.divider()
 
-st.subheader("💰 Faturamento Comercial (quebra por Canal/Divisional/Regional/Setor)")
+st.subheader("Faturamento Comercial (quebra por Canal/Divisional/Regional/Setor)")
 st.caption(
     "Mesmo total de `vendas_sap.fct_faturamento_itens_sap` acima, quebrado por dimensão "
     "comercial via o crosswalk cliente→setor (`vendas.dim_cliente_setor` → "
@@ -204,44 +207,46 @@ meta_ytd_com = df_com_meta_canal["Meta_Valor"].sum() if not df_com_meta_canal.em
 cob_meta_mtd_com = (faturado_mtd_com / meta_mtd_com) if meta_mtd_com else None
 cob_meta_ytd_com = (faturado_ytd_com / meta_ytd_com) if meta_ytd_com else None
 
-c5, c6, c7, c8 = st.columns(4)
-c5.metric("Faturado MTD (comercial)", f"R$ {faturado_mtd_com:,.0f}")
-c6.metric("Faturado YTD (comercial)", f"R$ {faturado_ytd_com:,.0f}")
-c7.metric(
-    "Cob. Meta MTD",
-    f"{cob_meta_mtd_com:.1%}" if cob_meta_mtd_com is not None else "—",
-    help=(
-        "Pode passar de 100% com folga: o numerador é o faturamento total (todas Org "
-        "Vendas, incl. filial estrangeira/intercompany), a meta só cobre a fatia com "
-        "crosswalk cliente→setor mapeado (~52%) — não é atingimento real de meta comercial."
-    ),
-)
-c8.metric(
-    "Cob. Meta YTD",
-    f"{cob_meta_ytd_com:.1%}" if cob_meta_ytd_com is not None else "—",
-    help=(
-        "Mesma ressalva do Cob. Meta MTD. Canal 'MS' também não tem meta própria — ver "
-        "**Faturamento vs Meta** pro detalhe."
-    ),
-)
+with st.container(border=True):
+    c5, c6, c7, c8 = st.columns(4)
+    c5.metric("Faturado MTD (comercial)", f"R$ {faturado_mtd_com:,.0f}")
+    c6.metric("Faturado YTD (comercial)", f"R$ {faturado_ytd_com:,.0f}")
+    c7.metric(
+        "Cob. Meta MTD",
+        f"{cob_meta_mtd_com:.1%}" if cob_meta_mtd_com is not None else "—",
+        help=(
+            "Pode passar de 100% com folga: o numerador é o faturamento total (todas Org "
+            "Vendas, incl. filial estrangeira/intercompany), a meta só cobre a fatia com "
+            "crosswalk cliente→setor mapeado (~52%) — não é atingimento real de meta comercial."
+        ),
+    )
+    c8.metric(
+        "Cob. Meta YTD",
+        f"{cob_meta_ytd_com:.1%}" if cob_meta_ytd_com is not None else "—",
+        help=(
+            "Mesma ressalva do Cob. Meta MTD. Canal 'MS' também não tem meta própria — ver "
+            "**Faturamento vs Meta** pro detalhe."
+        ),
+    )
 
 if not df_com_canal_ytd.empty:
-    col_com_a, col_com_b = st.columns([1, 2])
-    with col_com_a:
-        st.caption("Faturado YTD por Canal")
-        st.dataframe(
-            df_com_canal_ytd[["Dimensao", "Valor_Faturado"]]
-            .rename(columns={"Dimensao": "Canal", "Valor_Faturado": "Faturado YTD"})
-            .style.format({"Faturado YTD": "R$ {:,.0f}"}),
-            width="stretch",
-            hide_index=True,
-        )
-    with col_com_b:
-        st.bar_chart(df_com_canal_ytd.set_index("Dimensao")["Valor_Faturado"])
+    with card("home-canal-ytd"):
+        col_com_a, col_com_b = st.columns([1, 2])
+        with col_com_a:
+            st.caption("Faturado YTD por Canal")
+            st.dataframe(
+                df_com_canal_ytd[["Dimensao", "Valor_Faturado"]]
+                .rename(columns={"Dimensao": "Canal", "Valor_Faturado": "Faturado YTD"})
+                .style.format({"Faturado YTD": "R$ {:,.0f}"}),
+                width="stretch",
+                hide_index=True,
+            )
+        with col_com_b:
+            st.bar_chart(df_com_canal_ytd.set_index("Dimensao")["Valor_Faturado"])
 
 st.divider()
 
-st.subheader("⚠️ Pontos de atenção")
+st.subheader("Pontos de atenção")
 st.caption("Calculados ao vivo a partir do backlog, estoque, crédito e devoluções de hoje.")
 
 if valor_pendente_total > 0:
@@ -319,7 +324,7 @@ st.markdown(
     """
     ### Páginas
 
-    **📊 Dashboards** (fonte `vendas_sap` — backlog/operação; ao vivo, sem botão):
+    **Dashboards** (fonte `vendas_sap` — backlog/operação; ao vivo, sem botão):
 
     - **Pendências** — aging do backlog, cobertura de estoque, top clientes, backlog por
       tipo de ordem de venda.
@@ -337,8 +342,10 @@ st.markdown(
     - **Meta x Realizado (SAP)** — meta por mês x BU, atribuída via crosswalk cliente→setor.
     - **Relatório de Pedidos** — quantidade/valor médio de pedido por mês + ranking por
       cliente.
+    - **Visão do Vendedor** — ranking de faturamento por vendedor (Salesforce, ~82% de
+      cobertura) + drill-down individual (tendência mensal, top clientes).
 
-    **💰 Faturamento (Painel Vendas)** (inspirada no Painel Vendas de referência, mas sobre
+    **Faturamento (Painel Vendas)** (inspirada no Painel Vendas de referência, mas sobre
     `vendas_sap` + crosswalk cliente→setor — ver `docs/CONTEXTO_VENDAS_SAP.md` §10):
 
     - **Faturamento vs Meta** — gauges MTD/YTD, evolução diária/mensal/trimestral, Meta x
@@ -352,7 +359,7 @@ st.markdown(
     Todas as 5 acima têm um filtro de recorte próprio (Canal, Divisional, Cliente, Produto
     etc.) além do "Quebrar por" de cada gráfico/tabela.
 
-    **🛠️ Técnico** (ferramentas de investigação pontual, com botão/input):
+    **Técnico** (ferramentas de investigação pontual, com botão/input):
 
     - **Auditoria do Fluxo** — 4 checagens genéricas de anomalia.
     - **Rastrear Pedido** — SAP cru (HANA) → Gold → Salesforce, lado a lado, pra um

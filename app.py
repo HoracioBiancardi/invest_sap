@@ -26,8 +26,12 @@ import datetime
 
 import streamlit as st
 
+from scripts.ui_theme import apply_custom_theme
+
+apply_custom_theme()
+
 with st.sidebar:
-    st.markdown("#### 🔍 Filtro global")
+    st.markdown("#### :material/filter_alt: Filtro global")
     st.caption("Vale para Pendências, Jornada do Pedido, Crédito/Devoluções e Faturamento.")
     _hoje = datetime.date.today()
     _periodo = st.date_input(
@@ -47,32 +51,83 @@ with st.sidebar:
 pg = st.navigation(
     {
         "": [
-            st.Page("pages/0_Home.py", title="Home", icon="🔎", default=True),
+            st.Page("pages/0_Home.py", title="Home", icon=":material/dashboard:", default=True),
         ],
-        "📊 Dashboards": [
-            st.Page("pages/1_Pendencias.py", title="Pendências", icon="📦"),
-            st.Page("pages/5_Jornada_Pedido.py", title="Jornada do Pedido", icon="🔗"),
-            st.Page("pages/6_Estoque.py", title="Estoque", icon="📦"),
-            st.Page("pages/7_Credito_Devolucoes.py", title="Crédito e Devoluções", icon="💳"),
+        "Dashboards": [
             st.Page(
-                "pages/8_Faturamento_Org_Vendas.py", title="Faturamento por Org Vendas", icon="🏢"
+                "pages/1_Pendencias.py", title="Pendências", icon=":material/pending_actions:"
             ),
-            st.Page("pages/10_Analise_Historica.py", title="Análise Histórica", icon="📈"),
-            st.Page("pages/11_Metas.py", title="Meta x Realizado (SAP)", icon="🎯"),
-            st.Page("pages/16_Relatorio_Pedidos.py", title="Relatório de Pedidos", icon="🧾"),
+            st.Page(
+                "pages/5_Jornada_Pedido.py", title="Jornada do Pedido", icon=":material/route:"
+            ),
+            st.Page("pages/6_Estoque.py", title="Estoque", icon=":material/inventory_2:"),
+            st.Page(
+                "pages/7_Credito_Devolucoes.py",
+                title="Crédito e Devoluções",
+                icon=":material/credit_card:",
+            ),
+            st.Page(
+                "pages/8_Faturamento_Org_Vendas.py",
+                title="Faturamento por Org Vendas",
+                icon=":material/corporate_fare:",
+            ),
+            st.Page(
+                "pages/10_Analise_Historica.py",
+                title="Análise Histórica",
+                icon=":material/trending_up:",
+            ),
+            st.Page(
+                "pages/11_Metas.py",
+                title="Meta x Realizado (SAP)",
+                icon=":material/track_changes:",
+            ),
+            st.Page(
+                "pages/16_Relatorio_Pedidos.py",
+                title="Relatório de Pedidos",
+                icon=":material/receipt_long:",
+            ),
+            st.Page(
+                "pages/18_Visao_Vendedor.py",
+                title="Visão do Vendedor",
+                icon=":material/badge:",
+            ),
         ],
-        "💰 Faturamento (Painel Vendas)": [
-            st.Page("pages/12_Faturamento_vs_Meta.py", title="Faturamento vs Meta", icon="🎯"),
-            st.Page("pages/13_Faturamento_Diario.py", title="Faturamento Diário", icon="📅"),
-            st.Page("pages/14_Faturamento_Anual.py", title="Faturamento Anual (YoY)", icon="📆"),
-            st.Page("pages/15_Produto_Cliente.py", title="Produto / Cliente", icon="🧪"),
-            st.Page("pages/17_Relatorio_Analitico.py", title="Relatório Analítico", icon="🔬"),
+        "Faturamento (Painel Vendas)": [
+            st.Page(
+                "pages/12_Faturamento_vs_Meta.py",
+                title="Faturamento vs Meta",
+                icon=":material/speed:",
+            ),
+            st.Page(
+                "pages/13_Faturamento_Diario.py",
+                title="Faturamento Diário",
+                icon=":material/calendar_today:",
+            ),
+            st.Page(
+                "pages/14_Faturamento_Anual.py",
+                title="Faturamento Anual (YoY)",
+                icon=":material/calendar_month:",
+            ),
+            st.Page(
+                "pages/15_Produto_Cliente.py", title="Produto / Cliente", icon=":material/category:"
+            ),
+            st.Page(
+                "pages/17_Relatorio_Analitico.py",
+                title="Relatório Analítico",
+                icon=":material/query_stats:",
+            ),
         ],
-        "🛠️ Técnico": [
-            st.Page("pages/2_Auditoria.py", title="Auditoria do Fluxo", icon="🩺"),
-            st.Page("pages/3_Rastrear_Pedido.py", title="Rastrear Pedido", icon="🧭"),
-            st.Page("pages/4_DDIC_Lookup.py", title="DDIC Lookup", icon="📖"),
-            st.Page("pages/9_Conectividade.py", title="Conectividade", icon="🔌"),
+        "Técnico": [
+            st.Page(
+                "pages/2_Auditoria.py", title="Auditoria do Fluxo", icon=":material/fact_check:"
+            ),
+            st.Page(
+                "pages/3_Rastrear_Pedido.py",
+                title="Rastrear Pedido",
+                icon=":material/manage_search:",
+            ),
+            st.Page("pages/4_DDIC_Lookup.py", title="DDIC Lookup", icon=":material/menu_book:"),
+            st.Page("pages/9_Conectividade.py", title="Conectividade", icon=":material/cable:"),
         ],
     }
 )

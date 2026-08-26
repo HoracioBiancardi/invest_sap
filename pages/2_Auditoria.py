@@ -15,9 +15,10 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.audit_pendencia_flow import CHECKS  # noqa: E402
+from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Auditoria do Fluxo — Vendas SAP", page_icon="🩺", layout="wide")
-st.title("🩺 Auditoria do Fluxo")
+st.title(":material/fact_check: Auditoria do Fluxo")
 st.caption(
     "Varre o fluxo inteiro (não um pedido específico) procurando padrões de anomalia — "
     "ver `docs/COMO_RODAR.md` §8 para o que cada checagem faz."
@@ -51,7 +52,8 @@ if st.button("Rodar auditoria", type="primary", disabled=not selecionadas):
             if not isinstance(df, pd.DataFrame) or df.empty:
                 st.info("Nenhuma anomalia encontrada.")
             else:
-                st.dataframe(df, width="stretch", hide_index=True)
+                with card(f"auditoria-{nome}-{titulo}"):
+                    st.dataframe(df, width="stretch", hide_index=True)
         st.divider()
 else:
     st.caption("Selecione as checagens e clique em \"Rodar auditoria\".")
