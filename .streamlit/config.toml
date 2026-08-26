@@ -1,0 +1,29 @@
+# Tema escuro inspirado no blaumotorsport.com.br (CSS público extraído em 2026-08-25):
+# #26b4e9 (ciano — mesma família de cor do site institucional blau.com, #36b3e3, confirma
+# que é a cor de marca real em toda a Blau) como destaque, #2f343c (cor real do
+# .navbar-inverse do site) como painel escuro, fonte "Roboto" (a que o site usa, também
+# uma fonte clássica de dashboard/telemetria). Ver docs/COMO_RODAR.md §9.2.
+[theme]
+base = "dark"
+primaryColor = "#26B4E9"
+backgroundColor = "#1C1F26"
+secondaryBackgroundColor = "#262B33"
+textColor = "#F1F3F5"
+linkColor = "#26B4E9"
+font = "Roboto:https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap, sans-serif"
+headingFont = "Roboto:https://fonts.googleapis.com/css2?family=Roboto:wght@700&display=swap, sans-serif"
+baseRadius = "medium"
+borderColor = "#3A4149"
+dataframeBorderColor = "#3A4149"
+dataframeHeaderBackgroundColor = "#2F343C"
+showWidgetBorder = true
+chartCategoricalColors = ["#26B4E9", "#EDB50B", "#5CB85C", "#ADB5BD", "#3A589B", "#D9534F"]
+
+[theme.sidebar]
+backgroundColor = "#2F343C"
+secondaryBackgroundColor = "#23272E"
+textColor = "#F1F3F5"
+borderColor = "#23272E"
+
+[browser]
+gatherUsageStats = false

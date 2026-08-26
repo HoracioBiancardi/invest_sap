@@ -1,0 +1,78 @@
+repos:
+  # Python Formatter
+  - repo: https://github.com/psf/black
+    rev: 25.1.0
+    hooks:
+      - id: black
+        language_version: python3
+        args: ["--line-length", "100"]
+
+  # Organizador de imports
+  - repo: https://github.com/pre-commit/mirrors-isort
+    rev: v5.10.1
+    hooks:
+      - id: isort
+        args: ["--profile", "black", "--line-length", "100", "--settings-path=."]
+        exclude: ^airflow/scripts/check_sap_and_trigger\.py$
+
+  # Flake8 com plugins
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.1.2
+    hooks:
+      - id: flake8
+        additional_dependencies:
+          - flake8-bugbear
+          - flake8-docstrings
+        args:
+          - --max-line-length=100
+          - --extend-ignore=E203
+
+  # Linter de tipos
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.8.0
+    hooks:
+      - id: mypy
+        args: [--ignore-missing-imports]
+        additional_dependencies:
+          - types-requests
+          - types-pytz
+
+  # Segurança em Python
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.8.3
+    hooks:
+      - id: bandit
+        args: [-r, data-platform/]  # ajuste para seu diretório de código
+
+  # # SQL formatting
+  # - repo: https://github.com/tconbeer/sqlfmt
+  #   rev: v0.18.0
+  #   hooks:
+  #     - id: sqlfmt
+  #       language_version: python
+  #       additional_dependencies: ['.[jinjafmt]']
+
+  # SQL formatting
+  - repo: https://github.com/sqlfluff/sqlfluff
+    rev: 3.4.1
+    hooks:
+      - id: sqlfluff-lint
+        args: ["--config", ".sqlfluff", "--ignore", "templating"]
+        additional_dependencies: ["sqlfluff-templater-dbt", dbt-sqlserver]
+      - id: sqlfluff-fix
+        args: ["--config", ".sqlfluff", "--ignore", "templating"]
+        additional_dependencies: ["sqlfluff-templater-dbt", dbt-sqlserver]
+
+
+  # Hooks úteis e gerais
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-json
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-case-conflict
+      - id: check-symlinks

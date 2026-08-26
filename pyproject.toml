@@ -1,0 +1,54 @@
+[project]
+name = "blau"
+version = "0.1.0"
+description = ""
+authors = [{ name = "Karinne", email = "karinnecristina@stacktecnologias.com.br" }]
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "mkdocs>=1.6.1,<2",
+    "mkdocs-material>=9.6.21,<10",
+    "pandas>=3.0.1,<4",
+    "minio>=7.2.20,<8",
+    "dotenv>=0.9.9,<0.10",
+    "sqlalchemy>=2.0.47,<3",
+    "pyarrow>=23.0.1,<24",
+    "pyodbc>=5.1.0,<5.2.0",
+    "hdbcli>=2.27.23,<3",
+    "dbt-core>=1.9.0,<2",
+    "dbt-sqlserver>=1.9.0,<2",
+    "pre-commit>=4.5.1,<5",
+    "types-python-dateutil>=2.9.0.20260508,<3",
+    "streamlit>=1.38,<2",
+]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "poethepoet (>=0.42.1,<0.43.0)",
+    "black (==24.10.0)",
+    "isort (>=8.0.1,<9.0.0)",
+    "flake8 (>=7.3.0,<8.0.0)",
+    "confluent-kafka>=2.14.2",
+    "ipykernel (>=7.2.0,<8.0.0)",
+]
+
+
+[tool.poe.tasks.ing_bronze]
+help = "Executa um módulo de pipeline bronze: <modulo>"
+cmd  = "python -m data_pipelines.ingestion.bronze.pipelines.${module}"
+args = [
+  { name = "module", positional = true }
+  ]
+
+
+
+[tool.poe.tasks.dbt_run]
+help = "Executa dbt run: <target> <select>"
+cmd  = "dbt run --project-dir airflow/dags/dbt --target ${target} --select ${select}"
+args = [
+  { name = "target", positional = true },
+  { name = "select", positional = true }
+]
