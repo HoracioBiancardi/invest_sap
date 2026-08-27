@@ -27,17 +27,17 @@ except ImportError:
 
 def descricao_tabela(tabela: str, idioma: str = "P") -> pd.DataFrame:
     """Retorna a descrição textual de uma tabela SAP (DD02T)."""
-    query = f"""
+    query = """
         SELECT TABNAME, DDTEXT
         FROM DD02T
-        WHERE TABNAME = '{tabela.upper()}' AND DDLANGUAGE = '{idioma}'
-    """  # nosec B608
-    return read_hana_sql(query)
+        WHERE TABNAME = ? AND DDLANGUAGE = ?
+    """
+    return read_hana_sql(query, params=(tabela.upper(), idioma))
 
 
 def campos_tabela(tabela: str, idioma: str = "P") -> pd.DataFrame:
     """Lista os campos de uma tabela SAP com descrição, tipo e se é chave (DD03L)."""
-    query = f"""
+    query = """
         SELECT
             L.FIELDNAME,
             T.DDTEXT AS DESCRICAO,
@@ -47,11 +47,11 @@ def campos_tabela(tabela: str, idioma: str = "P") -> pd.DataFrame:
             L.POSITION
         FROM DD03L AS L
         LEFT JOIN DD04T AS T
-            ON L.ROLLNAME = T.ROLLNAME AND T.DDLANGUAGE = '{idioma}'
-        WHERE L.TABNAME = '{tabela.upper()}'
+            ON L.ROLLNAME = T.ROLLNAME AND T.DDLANGUAGE = ?
+        WHERE L.TABNAME = ?
         ORDER BY L.POSITION
-    """  # nosec B608
-    return read_hana_sql(query)
+    """
+    return read_hana_sql(query, params=(idioma, tabela.upper()))
 
 
 def main() -> int:

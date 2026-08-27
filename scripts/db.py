@@ -74,7 +74,9 @@ def get_sqlserver_engine(database: str = "GOLD") -> Engine:
     return create_engine(f"mssql+pyodbc:///?odbc_connect={params}", pool_pre_ping=True)
 
 
-def read_sql(query: str, database: str = "GOLD", params: Optional[dict[str, Any]] = None) -> pd.DataFrame:
+def read_sql(
+    query: str, database: str = "GOLD", params: Optional[dict[str, Any]] = None
+) -> pd.DataFrame:
     """Executa uma query no SQL Server (BRONZE/SILVER/GOLD) e retorna um DataFrame.
 
     Args:
@@ -124,8 +126,17 @@ def get_hana_connection(schema: Optional[str] = None):
     return dbapi.connect(**config)
 
 
-def read_hana_sql(query: str, schema: Optional[str] = None) -> pd.DataFrame:
+def read_hana_sql(
+    query: str, schema: Optional[str] = None, params: Optional[tuple[Any, ...]] = None
+) -> pd.DataFrame:
     """Executa uma query no SAP HANA/Datasphere e retorna um DataFrame.
+
+    Args:
+        query: SQL a executar. Use marcadores posicionais `?` (paramstyle "qmark" do
+            hdbcli) em vez de f-string sempre que o valor vier de fora do código, para
+            evitar SQL injection.
+        schema: Schema HANA a usar (ver `get_hana_connection`).
+        params: Sequência de valores para bind posicional dos `?` da query (opcional).
 
     hdbcli não é uma conexão SQLAlchemy/DBAPI2 totalmente padrão, então pandas emite um
     UserWarning inofensivo ao usá-la em pd.read_sql; suprimimos apenas esse aviso pontual.
@@ -136,6 +147,6 @@ def read_hana_sql(query: str, schema: Optional[str] = None) -> pd.DataFrame:
     try:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning, module="pandas")
-            return pd.read_sql(query, conn)
+            return pd.read_sql(query, conn, params=params)
     finally:
         conn.close()
