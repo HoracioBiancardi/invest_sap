@@ -488,9 +488,15 @@ def _condicao_tipo_cliente_por_codigo(
 
 
 def credito_disponivel_clientes(
-    apenas_bloqueados: bool = False, tipo_cliente: Optional[str] = None
+    apenas_bloqueados: bool = False, tipo_cliente: Optional[str] = None, limit: int = 5000
 ) -> pd.DataFrame:
-    """Limite/exposição de crédito por cliente (fct_limite_credito_sap)."""
+    """Limite/exposição de crédito por cliente (fct_limite_credito_sap).
+
+    Args:
+        apenas_bloqueados: se True, retorna só clientes com Flag_Cliente_Bloqueado = 'X'.
+        tipo_cliente: "Governo" ou "Privado" (None = os dois) — ver `_condicao_tipo_cliente_por_codigo`.
+        limit: teto de linhas.
+    """
     join_sql, condicao_tipo = _condicao_tipo_cliente_por_codigo(tipo_cliente, "cr.Codigo_Cliente")
     filtros = []
     if apenas_bloqueados:
@@ -499,7 +505,7 @@ def credito_disponivel_clientes(
     if condicao_tipo:
         where = f"{where}{condicao_tipo}" if where else f"WHERE 1=1{condicao_tipo}"
     query = f"""
-        SELECT cr.*
+        SELECT TOP {int(limit)} cr.*
         FROM {SCHEMA}.fct_limite_credito_sap cr
         {join_sql}
         {where}

@@ -33,8 +33,8 @@ tab_limite, tab_devolucao = st.tabs(["Limite de crédito", "Devoluções / abati
 
 
 @st.cache_data(ttl=300, show_spinner="Consultando limite de crédito...")
-def _credito_cached(apenas_bloqueados: bool, tipo_cliente: Optional[str]) -> pd.DataFrame:
-    return credito_disponivel_clientes(apenas_bloqueados, tipo_cliente=tipo_cliente)
+def _credito_cached(apenas_bloqueados: bool, tipo_cliente: Optional[str], limite: int) -> pd.DataFrame:
+    return credito_disponivel_clientes(apenas_bloqueados, tipo_cliente=tipo_cliente, limit=limite)
 
 
 @st.cache_data(ttl=300, show_spinner="Consultando devoluções/abatimentos...")
@@ -54,11 +54,17 @@ def _devolucoes_cached(
 with tab_limite:
     st.caption("Fonte: `GOLD.vendas_sap.fct_limite_credito_sap` — limite/exposição por cliente.")
     apenas_bloqueados = st.checkbox("Só clientes bloqueados", value=False)
+    limite_credito = st.slider("Máximo de linhas", min_value=100, max_value=20000, value=5000, step=100)
 
-    df_credito = _credito_cached(apenas_bloqueados, tipo_cliente)
+    df_credito = _credito_cached(apenas_bloqueados, tipo_cliente, limite_credito)
     if df_credito.empty:
         st.info("Nada encontrado.")
     else:
+        if len(df_credito) == limite_credito:
+            st.warning(
+                f"Resultado truncado em {limite_credito:,} linhas — pode haver mais clientes "
+                "além desse teto. Ajuste o filtro ou aumente o 'Máximo de linhas' acima."
+            )
         c1, c2, c3 = st.columns(3)
         c1.metric("Clientes", f"{len(df_credito):,}")
         c2.metric("Limite Concedido Total", f"R$ {df_credito['Valor_Limite_Credito_Concedido'].sum():,.2f}")
