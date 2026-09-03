@@ -155,6 +155,12 @@ div[class*="st-key-bmt-card-"]::after {
     z-index: 1;
     pointer-events: none;
 }
+/* stElementToolbar (ícones de fullscreen/download/"show data" que aparecem no hover de
+   gráfico/tabela) não tem z-index próprio — sem isso, fica por baixo do friso/acento
+   diagonal acima (z-index 1-2) e alguns ícones somem ou ficam inclicáveis. */
+div[class*="st-key-bmt-card-"] [data-testid="stElementToolbar"] {
+    z-index: 3 !important;
+}
 
 /* Rótulo de card opcional (helper `card_label()`) — texto tipo painel de instrumento */
 .bmt-card-label {
@@ -167,11 +173,17 @@ div[class*="st-key-bmt-card-"]::after {
 }
 
 /* Logo da Blau (st.logo): força maior que o teto do parâmetro size="large" do Streamlit
-   (mapeia pra um token de tema pequeno demais pro peso visual que a marca precisa aqui). */
+   (mapeia pra um token de tema pequeno demais pro peso visual que a marca precisa aqui) e
+   centraliza no cabeçalho da sidebar (default do Streamlit é alinhado à esquerda). */
 img[data-testid="stLogo"] {
-    height: 3.4rem !important;
+    height: 4.4rem !important;
     max-height: none !important;
+    max-width: 90%;
     width: auto !important;
+    object-fit: contain;
+}
+div[data-testid="stSidebarHeader"] {
+    justify-content: center !important;
 }
 
 /* Itens de navegação da sidebar (st.navigation): cantos arredondados no hover/seleção */
@@ -198,8 +210,8 @@ def apply_custom_theme() -> None:
     """
     st.markdown(_CSS, unsafe_allow_html=True)
     st.logo(
-        str(_ASSETS_DIR / "blau_logo.svg"),
-        icon_image=str(_ASSETS_DIR / "blau_icon.svg"),
+        str(_ASSETS_DIR / "blau_logo.png"),
+        icon_image=str(_ASSETS_DIR / "blau_icon.png"),
         size="large",
     )
 

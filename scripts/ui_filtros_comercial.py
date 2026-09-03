@@ -21,7 +21,7 @@ def _valores_cached(dimensao: str) -> list[str]:
 
 
 def render_filtros_comercial(key_prefix: str, dimensoes: list[str]) -> dict[str, str]:
-    """Renderiza um expander com 1 `st.selectbox` por dimensão em `dimensoes` (chaves de
+    """Renderiza 1 `st.selectbox` por dimensão em `dimensoes` (chaves de
     `DIMENSOES_FATURAMENTO`) e devolve só o que foi de fato escolhido (`{dimensao: valor}`,
     sem as que ficaram em "Todos") — pronto pra passar como `filtros=` pras funções de
     `scripts/query_faturamento_comercial.py`.
@@ -38,21 +38,20 @@ def render_filtros_comercial(key_prefix: str, dimensoes: list[str]) -> dict[str,
             raise ValueError(f"dimensao de filtro inválida: {dimensao!r}")
 
     filtros: dict[str, str] = {}
-    with st.expander("🔍 Filtros de recorte"):
-        st.caption(
-            "Restringe todos os números da página a um valor específico — não muda a "
-            "dimensão do gráfico/tabela abaixo, só filtra o que entra na conta."
-        )
-        # Busca tudo antes de desenhar qualquer selectbox — 1 spinner só pra todas as
-        # dimensões, em vez de widgets aparecendo um a um sem nenhum indicador (o que parecia
-        # página travada na primeira carga, com cache frio).
-        with st.spinner("Carregando opções de filtro..."):
-            valores_por_dimensao = {d: _valores_cached(d) for d in dimensoes}
-        cols = st.columns(3)
-        for i, dimensao in enumerate(dimensoes):
-            with cols[i % 3]:
-                opcoes = ["Todos"] + valores_por_dimensao[dimensao]
-                valor = st.selectbox(dimensao, opcoes, key=f"{key_prefix}_filtro_{dimensao}")
-                if valor != "Todos":
-                    filtros[dimensao] = valor
+    st.caption(
+        "Restringe todos os números da página a um valor específico — não muda a "
+        "dimensão do gráfico/tabela abaixo, só filtra o que entra na conta."
+    )
+    # Busca tudo antes de desenhar qualquer selectbox — 1 spinner só pra todas as
+    # dimensões, em vez de widgets aparecendo um a um sem nenhum indicador (o que parecia
+    # página travada na primeira carga, com cache frio).
+    with st.spinner("Carregando opções de filtro..."):
+        valores_por_dimensao = {d: _valores_cached(d) for d in dimensoes}
+    cols = st.columns(3)
+    for i, dimensao in enumerate(dimensoes):
+        with cols[i % 3]:
+            opcoes = ["Todos"] + valores_por_dimensao[dimensao]
+            valor = st.selectbox(dimensao, opcoes, key=f"{key_prefix}_filtro_{dimensao}")
+            if valor != "Todos":
+                filtros[dimensao] = valor
     return filtros

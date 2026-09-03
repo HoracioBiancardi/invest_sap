@@ -30,7 +30,7 @@ st.caption(
 )
 PAISES = {"Brasil": "BR", "Uruguai": "UY", "Colômbia": "CO", "Alemanha": "DE"}
 
-col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
 with col1:
     pais_opcao = st.selectbox(
         "País",
@@ -47,6 +47,8 @@ with col1:
 with col2:
     codigo_centro = st.text_input("Centro específico (opcional)", placeholder="ex.: 1100")
 with col3:
+    codigo_material = st.text_input("Material específico (opcional)", placeholder="ex.: PA5522")
+with col4:
     produto_acabado_opcao = st.selectbox(
         "Produto",
         options=["Todos", "Acabado", "Não Acabado"],
@@ -57,19 +59,26 @@ with col3:
             "resto (matéria-prima, embalagem, granel, consumíveis, etc.)."
         ),
     )
-with col4:
+with col5:
     linhas = st.slider("Linhas exibidas", min_value=20, max_value=500, value=100, step=20)
 
 produto_acabado = {"Todos": None, "Acabado": True, "Não Acabado": False}[produto_acabado_opcao]
 pais_centro = PAISES.get(pais_opcao)
+codigo_material = codigo_material.strip().upper() or None
 
 tab_restrito, tab_validade = st.tabs(["Restrito x Disponível", "Validade dos lotes"])
 
 
 @st.cache_data(ttl=300, show_spinner="Consultando estoque...")
-def _estoque_cached(codigo_centro: Optional[str], produto_acabado: Optional[bool], pais_centro: Optional[str]) -> pd.DataFrame:
+def _estoque_cached(
+    codigo_centro: Optional[str], codigo_material: Optional[str], produto_acabado: Optional[bool], pais_centro: Optional[str]
+) -> pd.DataFrame:
     return estoque_restrito_disponivel(
-        codigo_centro=codigo_centro, produto_acabado=produto_acabado, pais_centro=pais_centro, limit=2000
+        codigo_centro=codigo_centro,
+        codigo_material=codigo_material,
+        produto_acabado=produto_acabado,
+        pais_centro=pais_centro,
+        limit=2000,
     )
 
 
@@ -84,7 +93,7 @@ def _validade_detalhe_cached(codigo_centro: Optional[str], produto_acabado: Opti
 
 
 with tab_restrito:
-    df = _estoque_cached(codigo_centro or None, produto_acabado, pais_centro)
+    df = _estoque_cached(codigo_centro or None, codigo_material, produto_acabado, pais_centro)
 
     if df.empty:
         st.info("Nada encontrado para esse filtro.")

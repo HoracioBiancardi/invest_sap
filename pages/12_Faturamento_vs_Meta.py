@@ -6,7 +6,7 @@ Painel Vendas (Power BI) enviado pelo usuário — não é mais uma réplica num
 `vendas.fat_faturamento`, foi descartada por decisão do usuário — schema `vendas` legado só
 segue em uso pra `fat_meta_equipe`). Reusa scripts/query_faturamento_comercial.py — fonte
 `GOLD.vendas_sap.fct_faturamento_itens_sap`, com a hierarquia comercial via o mesmo crosswalk
-(~52% de cobertura) já usado em `pages/8_Faturamento_Org_Vendas.py`/`pages/11_Metas.py`.
+(~52% de cobertura) já usado em `pages/22_Faturamento.py`/`pages/11_Metas.py`.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ st.caption(
     "Fonte: `GOLD.vendas_sap.fct_faturamento_itens_sap` (Faturamento) + "
     "`GOLD.vendas.fat_meta_equipe` (Meta, SharePoint — planejamento, não transação). A "
     "quebra por Divisional/Regional/Distrital/Setor/Canal usa o mesmo crosswalk cliente→setor "
-    "de `pages/8_Faturamento_Org_Vendas.py`/`pages/11_Metas.py` (~52% de cobertura — cliente "
+    "de `pages/22_Faturamento.py`/`pages/11_Metas.py` (~52% de cobertura — cliente "
     "sem match cai em 'NAO ALOCADO', um balde grande e esperado, não um erro). Ver "
     "`docs/CONTEXTO_VENDAS_SAP.md` §10 pra fórmula completa e histórico."
 )

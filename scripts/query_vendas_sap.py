@@ -189,22 +189,377 @@ def top_clientes_pendentes(
     return read_sql(query, database="GOLD", params=params)
 
 
-def alocacao_virtual_fifo(codigo_centro: Optional[str] = None) -> pd.DataFrame:
+def alocacao_virtual_fifo(
+    codigo_centro: Optional[str] = None, codigo_produto: Optional[str] = None
+) -> pd.DataFrame:
     """Simulação FIFO de alocação de estoque por pedido (fct_pendencia_status_sap).
 
-    Status_Alocacao_Virtual possíveis: 'EM REMESSA', 'SEM ESTOQUE', 'CARIMBAGEM'
-    (hoje nunca ocorre — depende de Prioridade_Pedido IN (2,3), que nunca acontece
-    nesta base), 'EXC_COMERCIAL'.
+    Cada linha é um item de pedido pendente, na ordem em que vai receber estoque
+    conforme ele chega (Posicao_Fila_Prioridade). Status_Alocacao_Virtual possíveis:
+    'EM REMESSA', 'SEM ESTOQUE', 'CARIMBAGEM' (hoje nunca ocorre — depende de
+    Prioridade_Pedido IN (2,3), que nunca acontece nesta base), 'EXC_COMERCIAL'.
+
+    Args:
+        codigo_centro: filtra um centro específico.
+        codigo_produto: filtra um material específico (código exato, ex.: 'PA5522').
     """
-    where = "WHERE Codigo_Centro = :centro" if codigo_centro else ""
+    condicoes = []
+    params: dict[str, object] = {}
+    if codigo_centro:
+        condicoes.append("Codigo_Centro = :centro")
+        params["centro"] = codigo_centro
+    if codigo_produto:
+        condicoes.append("Codigo_Produto = :produto")
+        params["produto"] = codigo_produto
+    where = ("WHERE " + " AND ".join(condicoes)) if condicoes else ""
     query = f"""
         SELECT *
         FROM {SCHEMA}.fct_pendencia_status_sap
         {where}
         ORDER BY Codigo_Produto, Codigo_Centro, Posicao_Fila_Prioridade
     """  # nosec B608
-    params = {"centro": codigo_centro} if codigo_centro else None
-    return read_sql(query, database="GOLD", params=params)
+    return read_sql(query, database="GOLD", params=params or None)
+
+
+def pendencia_x_estoque_global() -> pd.DataFrame:
+    """Pendência (backlog aberto) cruzada com a simulação FIFO de estoque, pra TODOS os
+    materiais/pedidos de uma vez — mesma ideia de `pedido_estoque_fatura_material` +
+    aba "Simulação FIFO" da página Material, só que sem exigir filtrar por 1 material
+    (usada na página Pedidos, seção "Pendência x Estoque — visão completa").
+
+    Grão: 1 linha por item de pedido pendente (`Flag_Pendencia = 1`). `(Numero_Pedido,
+    Item_Pedido)` é chave única em `fct_pendencia_sap` e em `fct_pendencia_status_sap`
+    — join 1:1, não duplica linha. `Status_Alocacao_Virtual` vem pronto do dbt
+    (mesmos valores de `alocacao_virtual_fifo`): 'EM REMESSA' (tem estoque na posição
+    da fila FIFO), 'SEM ESTOQUE' (não tem, nem simulando FIFO), 'CARIMBAGEM'/
+    'EXC_COMERCIAL' (ver docstring de `alocacao_virtual_fifo`).
+
+    Sem parâmetros de propósito (evita o formato de risco documentado — filtro
+    parametrizado + CTE/GROUP BY — do bug de plan cache do SQL Server); filtrar o
+    resultado em pandas depois de trazer.
+    """
+    query = f"""
+        SELECT
+            p.Numero_Pedido, p.Item_Pedido, p.Data_Inclusao_Pedido, p.Dias_Desde_Inclusao_Pedido,
+            p.Codigo_Produto, p.Descricao_Produto, p.Codigo_Centro, p.Nome_Centro,
+            p.Codigo_Cliente, p.Nome_Cliente,
+            p.Qtd_Pendente_Remessa, p.Qtd_Pendente_Operacional, p.Valor_Pendente_Faturamento,
+            p.Status_Pendencia,
+            s.Posicao_Fila_Prioridade, s.Qtd_Estoque_Disponivel_Planta,
+            s.Qtd_Estoque_Saldo_Virtual_Restante, s.Status_Alocacao_Virtual
+        FROM {SCHEMA}.fct_pendencia_sap p
+        INNER JOIN {SCHEMA}.fct_pendencia_status_sap s
+            ON p.Numero_Pedido = s.Numero_Pedido AND p.Item_Pedido = s.Item_Pedido
+        WHERE p.Flag_Pendencia = 1
+        ORDER BY p.Codigo_Produto, p.Codigo_Centro, s.Posicao_Fila_Prioridade
+    """  # nosec B608
+    return read_sql(query, database="GOLD")
+
+
+def pedido_estoque_fatura_material(
+    codigo_produto: str, somente_pendente: bool = True
+) -> pd.DataFrame:
+    """Visão combinada pedido + estoque + faturamento pra 1 material (fct_pendencia_sap).
+
+    Cada linha é 1 item de pedido, com quanto foi pedido/remetido/faturado/está
+    pendente e o estoque do Centro daquele item — pra ver pedido, estoque e fatura
+    juntos sem precisar cruzar 3 páginas na mão.
+
+    Traz `Qtd_Estoque_Disponivel_Venda` original (como vem de `fct_pendencia_sap`,
+    que soma `fct_estoque_lote_sap.Qtd_Disponivel_Venda` por Material+Centro) ao lado
+    de `Estoque_Disponivel_Corrigido`, calculado aqui a partir de
+    `fct_estoque_lote_sap` (SUM(Qtd_Estoque_Livre) - Qtd_Estoque_Reservada por
+    Material+Centro). Os dois podem divergir bastante: o campo original herda um bug
+    do dbt de `fct_estoque_lote_sap` (reservado da planta é subtraído do estoque livre
+    de CADA lote individualmente, não do total do material+centro — zera o disponível
+    sempre que nenhum lote isolado é maior que o reservado, mesmo com estoque de sobra
+    somando os lotes). Ver docs/CONTEXTO_VENDAS_SAP.md antes de reportar esse número
+    pra alguém de fora do time de dados.
+
+    Também traz `Valor_Credito_Disponivel`/`Cliente_Bloqueado` (de
+    `fct_limite_credito_sap`, pior caso entre as áreas de crédito do cliente) — um
+    pedido em `Status_Pendencia = 'Pendente Logistico e Fiscal'` com estoque
+    disponível pode estar simplesmente "novo" (SAP ainda não rodou a criação de
+    remessa) ou preso porque o cliente está sem limite; esses dois campos ajudam a
+    distinguir os dois casos sem sair da tela.
+
+    Args:
+        codigo_produto: código exato do material (ex.: 'PA5522').
+        somente_pendente: True (default) traz só itens com Flag_Pendencia = 1; False
+            traz o histórico completo do material, incluindo já totalmente faturado.
+    """
+    where_pendencia = " AND p.Flag_Pendencia = 1" if somente_pendente else ""
+    query = f"""
+        WITH estoque_corrigido AS (
+            SELECT
+                Codigo_Centro,
+                SUM(Qtd_Estoque_Livre) AS Estoque_Livre_Total,
+                MAX(Qtd_Estoque_Reservada) AS Estoque_Reservado,
+                CASE
+                    WHEN SUM(Qtd_Estoque_Livre) - MAX(Qtd_Estoque_Reservada) > 0
+                        THEN SUM(Qtd_Estoque_Livre) - MAX(Qtd_Estoque_Reservada)
+                    ELSE 0
+                END AS Estoque_Disponivel_Corrigido
+            FROM {SCHEMA}.fct_estoque_lote_sap
+            WHERE Codigo_Material = :produto
+            GROUP BY Codigo_Centro
+        ),
+        credito_cliente AS (
+            -- Cliente pode ter 1 linha por Área de Controle de Crédito; pega o pior
+            -- caso (menor crédito disponível / bloqueado em qualquer área).
+            SELECT
+                Codigo_Cliente,
+                MIN(Valor_Credito_Disponivel) AS Valor_Credito_Disponivel,
+                MAX(CASE WHEN Flag_Cliente_Bloqueado = 'X' THEN 1 ELSE 0 END) AS Cliente_Bloqueado
+            FROM {SCHEMA}.fct_limite_credito_sap
+            GROUP BY Codigo_Cliente
+        )
+        SELECT
+            p.Numero_Pedido, p.Item_Pedido, p.Data_Inclusao_Pedido, p.Dias_Desde_Inclusao_Pedido,
+            p.Codigo_Centro, p.Nome_Centro, p.Codigo_Cliente, p.Nome_Cliente,
+            p.Qtd_Pedida, p.Qtd_Remetida, p.Qtd_Faturada,
+            p.Qtd_Pendente_Remessa, p.Qtd_Pendente_Faturamento, p.Qtd_Pendente_Operacional,
+            p.Valor_Liquido_Pedido, p.Valor_Liquido_Faturado, p.Valor_Pendente_Faturamento,
+            p.Status_Faturamento, p.Status_Pendencia, p.Status_Pendencia_Estoque,
+            p.Qtd_Estoque_Disponivel_Venda AS Qtd_Estoque_Disponivel_Venda_Original,
+            COALESCE(ec.Estoque_Disponivel_Corrigido, 0) AS Estoque_Disponivel_Corrigido,
+            cr.Valor_Credito_Disponivel, cr.Cliente_Bloqueado,
+            p.Flag_Totalmente_Faturado
+        FROM {SCHEMA}.fct_pendencia_sap p
+        LEFT JOIN estoque_corrigido ec
+            ON p.Codigo_Centro = ec.Codigo_Centro
+        LEFT JOIN credito_cliente cr
+            ON p.Codigo_Cliente = cr.Codigo_Cliente
+        WHERE p.Codigo_Produto = :produto{where_pendencia}
+        ORDER BY p.Dias_Desde_Inclusao_Pedido DESC
+    """  # nosec B608
+    return read_sql(query, database="GOLD", params={"produto": codigo_produto})
+
+
+def cliente_360(codigo_cliente: str, somente_pendente: bool = False) -> dict[str, pd.DataFrame]:
+    """Visão 360º de 1 cliente: pedido/pendência/fatura + crédito + devoluções, juntos.
+
+    Mesmo espírito de `pedido_estoque_fatura_material` (ver "tudo" sobre 1 valor de busca),
+    só que por `Codigo_Cliente` em vez de material — e devolve um dict de DataFrames (não 1
+    tabela só), porque pedido/crédito/devolução têm grãos diferentes demais pra juntar numa
+    única linha sem duplicar (ex.: crédito é 1 linha por Área de Controle, devolução é por
+    lançamento contábil) — mesmo padrão de `scripts/trace_pedido.py::trace_pedido`.
+
+    Args:
+        codigo_cliente: código exato do cliente.
+        somente_pendente: se True, a aba de pedidos traz só backlog aberto
+            (`Flag_Pendencia = 1`); default False traz o histórico completo do cliente.
+    """
+    where_pendencia = " AND Flag_Pendencia = 1" if somente_pendente else ""
+    pedidos_query = f"""
+        SELECT *
+        FROM {SCHEMA}.fct_pendencia_sap
+        WHERE Codigo_Cliente = :cliente{where_pendencia}
+        ORDER BY Data_Inclusao_Pedido DESC
+    """  # nosec B608
+    df_pedidos = read_sql(pedidos_query, database="GOLD", params={"cliente": codigo_cliente})
+
+    df_credito = credito_disponivel_clientes(codigo_cliente=codigo_cliente)
+    df_devolucoes = devolucoes_credito_motivo(
+        data_inicio=date.today() - timedelta(days=365),
+        data_fim=date.today(),
+        codigo_cliente=codigo_cliente,
+        limit=500,
+    )
+    return {
+        "Pedido / Pendência / Fatura": df_pedidos,
+        "Crédito": df_credito,
+        "Devoluções / abatimentos (últimos 12 meses)": df_devolucoes,
+    }
+
+
+def visao_360_material_cliente(
+    codigo_produto: Optional[str] = None,
+    codigo_cliente: Optional[str] = None,
+    tipo_ordem_venda: Optional[str] = None,
+    somente_pendente: bool = False,
+    meses_historico: int = 24,
+) -> dict[str, pd.DataFrame]:
+    """Visão cruzada por material e/ou cliente: Oportunidade + Pedido/Pendência/Fatura +
+    Remessa + Estoque, juntos — exige pelo menos 1 dos 2 filtros.
+
+    Complementa `pedido_estoque_fatura_material` (só material, com a correção de estoque
+    por lote) e `cliente_360` (só cliente, com crédito/devolução) — esta função existe pra
+    cruzar os 2 ao mesmo tempo e trazer também Oportunidade (que nenhuma das outras duas
+    tem) e Remessa (`fct_remessa_itens_sap`, que nenhuma das outras duas usa).
+
+    `Estoque` só entra no resultado quando `codigo_produto` é informado — estoque é
+    posição de Material+Centro, não existe "estoque de um cliente".
+
+    Args:
+        codigo_produto: código exato do material (ex.: 'PA5522').
+        codigo_cliente: código exato do cliente.
+        tipo_ordem_venda: filtra por código SAP (AUART) exato do tipo de ordem — sem
+            tradução pra texto disponível nesta base (ver página Pedidos, seção "Backlog
+            por Tipo de Ordem de Venda", pra ver os códigos existentes e seu volume antes
+            de escolher um aqui). Aplica-se às abas Oportunidade e Pedido/Pendência/Fatura
+            (fonte comum, `fct_pendencia_sap`); Remessa e Estoque não têm esse campo.
+        somente_pendente: se True, a aba de pedido traz só backlog aberto
+            (`Flag_Pendencia = 1`); default False traz o histórico completo do filtro.
+        meses_historico: janela (meses, até hoje) usada só nas abas Oportunidade e
+            Remessas — Pedido/Pendência/Fatura e Estoque são "foto de hoje", sem filtro de
+            período (mesma convenção do resto do módulo).
+    """
+    if not codigo_produto and not codigo_cliente:
+        raise ValueError("informe codigo_produto e/ou codigo_cliente")
+
+    data_fim = date.today()
+    data_inicio = data_fim - timedelta(days=meses_historico * 30)
+
+    condicoes = []
+    params: dict[str, object] = {}
+    if codigo_produto:
+        condicoes.append("Codigo_Produto = :produto")
+        params["produto"] = codigo_produto
+    if codigo_cliente:
+        condicoes.append("Codigo_Cliente = :cliente")
+        params["cliente"] = codigo_cliente
+    if tipo_ordem_venda:
+        condicoes.append("Tipo_Ordem_Venda = :tipo_ordem")
+        params["tipo_ordem"] = tipo_ordem_venda
+    if somente_pendente:
+        condicoes.append("Flag_Pendencia = 1")
+    pedidos_query = f"""
+        SELECT *
+        FROM {SCHEMA}.fct_pendencia_sap
+        WHERE {" AND ".join(condicoes)}
+        ORDER BY Data_Inclusao_Pedido DESC
+    """  # nosec B608
+    df_pedidos = read_sql(pedidos_query, database="GOLD", params=params)
+
+    df_oportunidade = correlacao_oportunidade_pedido_pendencia_fatura(
+        data_inicio=data_inicio,
+        data_fim=data_fim,
+        apenas_pendentes=False,
+        codigo_produto=codigo_produto,
+        codigo_cliente=codigo_cliente,
+        tipo_ordem_venda=tipo_ordem_venda,
+        limit=20000,
+    )
+
+    df_remessas = remessas(
+        codigo_produto=codigo_produto,
+        codigo_cliente=codigo_cliente,
+        data_inicio=data_inicio,
+        data_fim=data_fim,
+        limit=2000,
+    )
+
+    resultado = {
+        "Oportunidade": df_oportunidade,
+        "Pedido / Pendência / Fatura": df_pedidos,
+        "Remessas": df_remessas,
+    }
+    if codigo_produto:
+        resultado["Estoque"] = estoque_restrito_disponivel(codigo_material=codigo_produto, limit=200)
+    return resultado
+
+
+def remessas(
+    numero_pedido: Optional[str] = None,
+    codigo_produto: Optional[str] = None,
+    codigo_centro: Optional[str] = None,
+    codigo_cliente: Optional[str] = None,
+    data_inicio: Optional[date] = None,
+    data_fim: Optional[date] = None,
+    limit: int = 2000,
+) -> pd.DataFrame:
+    """Remessas (entregas) item a item, de `fct_remessa_itens_sap` (grão Entrega+Item).
+
+    Os 4 campos de status (`Wbsta_Status_Movimento_Mercadoria`,
+    `Lfgsa_Status_Global_Remessa_Item`, `Lvsta_Status_Warehouse_Management`,
+    `Fksta_Status_Remessa_Faturamento`) vêm **crus** do SAP (`VBUP`) e, medido ao vivo
+    nesta base (2026-09-02, amostra de 200 mil linhas), estão **100% NULL** — não é só
+    "sem tradução de texto" (isso também é verdade: nenhum lugar do pipeline traduz esses
+    códigos, não há `DD07T`/domínio consultado em `scripts/ddic_lookup.py`), é dado
+    ausente mesmo. Na prática, **não dá pra usar esses 4 campos** pra filtrar/segmentar
+    remessa nessa base hoje — mantidos aqui só como colunas de passagem (podem vir a ser
+    preenchidos no futuro). Pra status de pendência confiável, use `Status_Pendencia` de
+    `fct_pendencia_sap` (páginas Pedidos/Material) — essa é calculada por quantidade
+    (`qtd_pendente_remessa`/`qtd_pendente_faturamento`), não pelos campos de status do SAP.
+
+    Também não há aqui valor financeiro nem data de entrega prevista/atraso — o modelo não
+    traz esses campos (só `Data_Remessa`, a data real de saída). Ver `remessas_resumo()`
+    pra visão agregada (por `Tipo_Remessa`/`Codigo_Centro`, os campos que de fato têm
+    dado — `Tipo_Remessa` e `Codigo_Centro` são 100% preenchidos, medido na mesma amostra).
+
+    Traz também `Nome_Cliente` (via `dim_cliente_sap`, mesmo padrão de join usado em
+    `top_clientes_por_vendedor`) — `fct_remessa_itens_sap` só tem `Codigo_Cliente`.
+
+    Args:
+        numero_pedido: filtra pelo pedido de origem (`Numero_Pedido_Origem`).
+        codigo_produto, codigo_centro, codigo_cliente: filtros exatos.
+        data_inicio, data_fim: período de `Data_Remessa` (se ambos informados).
+        limit: teto de linhas.
+    """
+    condicoes = []
+    params: dict[str, object] = {}
+    if numero_pedido:
+        condicoes.append("r.Numero_Pedido_Origem = :numero_pedido")
+        params["numero_pedido"] = numero_pedido.strip().zfill(10)
+    if codigo_produto:
+        condicoes.append("r.Codigo_Produto = :produto")
+        params["produto"] = codigo_produto
+    if codigo_centro:
+        condicoes.append("r.Codigo_Centro = :centro")
+        params["centro"] = codigo_centro
+    if codigo_cliente:
+        condicoes.append("r.Codigo_Cliente = :cliente")
+        params["cliente"] = codigo_cliente
+    if data_inicio and data_fim:
+        condicoes.append("r.Data_Remessa BETWEEN :data_inicio AND :data_fim")
+        params["data_inicio"] = data_inicio
+        params["data_fim"] = data_fim
+    where = ("WHERE " + " AND ".join(condicoes)) if condicoes else ""
+    query = f"""
+        SELECT TOP {int(limit)} r.*, cl.Nome_Cliente
+        FROM {SCHEMA}.fct_remessa_itens_sap r
+        LEFT JOIN (SELECT DISTINCT Codigo_Cliente, Nome_Cliente FROM {SCHEMA}.dim_cliente_sap) cl
+            ON r.Codigo_Cliente = cl.Codigo_Cliente
+        {where}
+        ORDER BY r.Data_Remessa DESC
+    """  # nosec B608
+    return read_sql(query, database="GOLD", params=params or None)
+
+
+def remessas_resumo(
+    data_inicio: Optional[date] = None, data_fim: Optional[date] = None
+) -> pd.DataFrame:
+    """Remessas agregadas por Tipo de Remessa x Centro — visão de volume, sem item a item.
+
+    Agrupa por `Tipo_Remessa`/`Codigo_Centro` (não pelos 4 campos de status do SAP, que
+    estão 100% NULL nesta base — ver caveat em `remessas()`); são os 2 campos de fato
+    preenchidos pra segmentar volume de remessa.
+
+    Args:
+        data_inicio, data_fim: período de `Data_Remessa` (se ambos informados; senão traz
+            tudo).
+    """
+    params: dict[str, object] = {}
+    where = ""
+    if data_inicio and data_fim:
+        where = "WHERE Data_Remessa BETWEEN :data_inicio AND :data_fim"
+        params["data_inicio"] = data_inicio
+        params["data_fim"] = data_fim
+    query = f"""
+        SELECT
+            Tipo_Remessa,
+            Codigo_Centro,
+            COUNT(*) AS Qtd_Itens,
+            COUNT(DISTINCT Numero_Entrega) AS Qtd_Remessas,
+            SUM(Qtd_Remetida) AS Qtd_Remetida_Total,
+            SUM(Peso_Liquido) AS Peso_Liquido_Total
+        FROM {SCHEMA}.fct_remessa_itens_sap
+        {where}
+        GROUP BY Tipo_Remessa, Codigo_Centro
+        ORDER BY Qtd_Itens DESC
+    """  # nosec B608
+    return read_sql(query, database="GOLD", params=params or None)
 
 
 def faturamento_periodo(data_inicio: str, data_fim: str) -> pd.DataFrame:
@@ -227,6 +582,9 @@ def correlacao_oportunidade_pedido_pendencia_fatura(
     apenas_pendentes: bool = True,
     numero_pedido: Optional[str] = None,
     nome_cliente: Optional[str] = None,
+    codigo_cliente: Optional[str] = None,
+    codigo_produto: Optional[str] = None,
+    tipo_ordem_venda: Optional[str] = None,
     tipo_cliente: Optional[str] = None,
     limit: int = 20000,
 ) -> pd.DataFrame:
@@ -264,6 +622,10 @@ def correlacao_oportunidade_pedido_pendencia_fatura(
             False, inclui itens já totalmente faturados dentro do período.
         numero_pedido: filtra um pedido específico (com ou sem zeros à esquerda).
         nome_cliente: filtra por trecho do nome do cliente (LIKE, case-insensitive).
+        codigo_cliente: filtra por código exato do cliente (independente de `nome_cliente`
+            — use um ou outro, não os dois).
+        codigo_produto: filtra por código exato do material (ex.: 'PA5522').
+        tipo_ordem_venda: filtra por código SAP (AUART) exato do tipo de ordem.
         tipo_cliente: "Governo" (canal de distribuição 'GOVERNO / PÚBLICO' ou 'PUBLICO',
             via `dim_cliente_sap.Descricao_Canal_Distribuicao`) ou "Privado" (qualquer outro
             canal, incluindo sem match de dimensão). None traz os dois.
@@ -303,6 +665,15 @@ def correlacao_oportunidade_pedido_pendencia_fatura(
     if nome_cliente:
         filtros.append("p.Nome_Cliente LIKE :nome_cliente")
         params["nome_cliente"] = f"%{nome_cliente.strip()}%"
+    if codigo_cliente:
+        filtros.append("p.Codigo_Cliente = :codigo_cliente")
+        params["codigo_cliente"] = codigo_cliente
+    if codigo_produto:
+        filtros.append("p.Codigo_Produto = :codigo_produto")
+        params["codigo_produto"] = codigo_produto
+    if tipo_ordem_venda:
+        filtros.append("p.Tipo_Ordem_Venda = :tipo_ordem_venda")
+        params["tipo_ordem_venda"] = tipo_ordem_venda
     # CANAIS_GOVERNO é uma constante fixa do código (não input externo) — seguro interpolar
     # direto; bind param nomeado não expande bem uma tupla numa cláusula IN via SQLAlchemy text().
     if tipo_cliente == "Governo":
@@ -320,7 +691,7 @@ def correlacao_oportunidade_pedido_pendencia_fatura(
     # problema de performance do IN (...) contra o Salesforce descrito na nota acima.
     pedido_query = f"""
         SELECT TOP {int(limit)}
-            p.Numero_Pedido, p.Item_Pedido, p.Data_Inclusao_Pedido,
+            p.Numero_Pedido, p.Item_Pedido, p.Data_Inclusao_Pedido, p.Tipo_Ordem_Venda,
             p.Codigo_Cliente, p.Nome_Cliente, p.Codigo_Produto, p.Descricao_Produto, p.Nome_Centro,
             p.Valor_Liquido_Pedido, p.Valor_Liquido_Faturado, p.Valor_Pendente_Faturamento,
             p.Qtd_Pedida, p.Qtd_Faturada, p.Qtd_Pendente_Operacional,
@@ -488,19 +859,28 @@ def _condicao_tipo_cliente_por_codigo(
 
 
 def credito_disponivel_clientes(
-    apenas_bloqueados: bool = False, tipo_cliente: Optional[str] = None, limit: int = 5000
+    apenas_bloqueados: bool = False,
+    tipo_cliente: Optional[str] = None,
+    codigo_cliente: Optional[str] = None,
+    limit: int = 5000,
 ) -> pd.DataFrame:
     """Limite/exposição de crédito por cliente (fct_limite_credito_sap).
 
     Args:
         apenas_bloqueados: se True, retorna só clientes com Flag_Cliente_Bloqueado = 'X'.
         tipo_cliente: "Governo" ou "Privado" (None = os dois) — ver `_condicao_tipo_cliente_por_codigo`.
+        codigo_cliente: filtra por código exato do cliente (pode trazer mais de 1 linha —
+            grão real é Cliente+Área de Controle de Crédito).
         limit: teto de linhas.
     """
     join_sql, condicao_tipo = _condicao_tipo_cliente_por_codigo(tipo_cliente, "cr.Codigo_Cliente")
     filtros = []
+    params: dict[str, object] = {}
     if apenas_bloqueados:
         filtros.append("cr.Flag_Cliente_Bloqueado = 'X'")
+    if codigo_cliente:
+        filtros.append("cr.Codigo_Cliente = :codigo_cliente")
+        params["codigo_cliente"] = codigo_cliente
     where = ("WHERE " + " AND ".join(filtros)) if filtros else ""
     if condicao_tipo:
         where = f"{where}{condicao_tipo}" if where else f"WHERE 1=1{condicao_tipo}"
@@ -511,7 +891,7 @@ def credito_disponivel_clientes(
         {where}
         ORDER BY Valor_Credito_Disponivel ASC
     """  # nosec B608
-    return read_sql(query, database="GOLD")
+    return read_sql(query, database="GOLD", params=params or None)
 
 
 def pendencia_por_tipo_ordem_venda(
@@ -563,6 +943,7 @@ def _moeda_case_sql(alias_pais: str = "c.Pais_Centro") -> str:
 
 def estoque_restrito_disponivel(
     codigo_centro: Optional[str] = None,
+    codigo_material: Optional[str] = None,
     produto_acabado: Optional[bool] = None,
     pais_centro: Optional[str] = None,
     limit: int = 500,
@@ -583,6 +964,7 @@ def estoque_restrito_disponivel(
 
     Args:
         codigo_centro: filtra um centro específico.
+        codigo_material: filtra um material específico (código exato, ex.: 'PA5522').
         produto_acabado: True = só produto acabado (`Tipo_Material` in
             `TIPOS_MATERIAL_PRODUTO_ACABADO`, via `dim_material_sap`); False = só o resto
             (matéria-prima, embalagem, granel, consumíveis etc.); None = os dois.
@@ -595,6 +977,9 @@ def estoque_restrito_disponivel(
     if codigo_centro:
         filtros.append("e.Codigo_Centro = :centro")
         params["centro"] = codigo_centro
+    if codigo_material:
+        filtros.append("e.Codigo_Material = :material")
+        params["material"] = codigo_material
     if pais_centro:
         filtros.append("c.Pais_Centro = :pais_centro")
         params["pais_centro"] = pais_centro
@@ -618,7 +1003,9 @@ def estoque_restrito_disponivel(
             SUM(e.Qtd_Estoque_Qualidade) AS Qtd_Qualidade,
             SUM(e.Qtd_Estoque_Bloqueado) AS Qtd_Bloqueado,
             SUM(e.Qtd_Estoque_Transferencia) AS Qtd_Transferencia,
-            SUM(e.Qtd_Estoque_Reservada) AS Qtd_Reservada,
+            -- Qtd_Estoque_Reservada já vem no grão Material+Centro (repetida em toda linha
+            -- de lote); SUM multiplicaria o valor real pelo nº de lotes.
+            MAX(e.Qtd_Estoque_Reservada) AS Qtd_Reservada,
             SUM(e.Qtd_Disponivel_Venda) AS Qtd_Disponivel_Venda,
             SUM(e.Qtd_Estoque_Fisico_Total) AS Qtd_Fisico_Total,
             SUM(e.Valor_Financeiro_Estoque) AS Valor_Financeiro_Estoque
@@ -778,6 +1165,7 @@ def devolucoes_credito_motivo(
     data_fim: Optional[date] = None,
     excluir_faturamento_rotina: bool = True,
     nome_cliente: Optional[str] = None,
+    codigo_cliente: Optional[str] = None,
     tipo_cliente: Optional[str] = None,
     limit: int = 2000,
 ) -> pd.DataFrame:
@@ -796,6 +1184,7 @@ def devolucoes_credito_motivo(
             faturamento de rotina, texto sempre "Transf.docs.faturam. ...", não é uma
             devolução/abatimento de negócio de fato.
         nome_cliente: filtra por trecho do nome do cliente (LIKE, case-insensitive).
+        codigo_cliente: filtra por código exato do cliente.
         tipo_cliente: "Governo" ou "Privado" (None = os dois) — ver `_condicao_tipo_cliente_por_codigo`.
         limit: teto de linhas.
 
@@ -816,6 +1205,9 @@ def devolucoes_credito_motivo(
     if nome_cliente:
         filtros.append("cl.Nome_Cliente LIKE :nome_cliente")
         params["nome_cliente"] = f"%{nome_cliente.strip()}%"
+    if codigo_cliente:
+        filtros.append("CAST(d.Cliente AS BIGINT) = CAST(:codigo_cliente AS BIGINT)")
+        params["codigo_cliente"] = codigo_cliente
     join_tipo, condicao_tipo = _condicao_tipo_cliente_por_codigo(tipo_cliente, "d.Cliente")
     where = "WHERE " + " AND ".join(filtros) + condicao_tipo
     query = f"""
@@ -1041,6 +1433,26 @@ def estoque_totais() -> pd.DataFrame:
         FROM {SCHEMA}.fct_estoque_lote_sap e
         LEFT JOIN (SELECT DISTINCT Codigo_Centro, Pais_Centro FROM {SCHEMA}.dim_centro_sap) c
             ON e.Codigo_Centro = c.Codigo_Centro
+    """  # nosec B608
+    return read_sql(query, database="GOLD")
+
+
+def estoque_reservado_por_material_centro() -> pd.DataFrame:
+    """Estoque reservado (VBBE) por Material+Centro — 1 linha por combinação, sem teto.
+
+    `Qtd_Estoque_Reservada` já vem no grão Material+Centro em `fct_estoque_lote_sap`
+    (repetida em toda linha de lote); por isso `MAX` em vez de `SUM` (mesmo cuidado de
+    `estoque_restrito_disponivel`). Usado pra cruzar com backlog aberto (ver página
+    **Pedidos**, seção "Radar de pedido zumbi") e mostrar quanto do backlog antigo não
+    tem reserva viva no SAP por trás — candidato a pedido nunca baixado/cancelado.
+    """
+    query = f"""
+        SELECT
+            Codigo_Material AS Codigo_Produto,
+            Codigo_Centro,
+            MAX(Qtd_Estoque_Reservada) AS Qtd_Reservada
+        FROM {SCHEMA}.fct_estoque_lote_sap
+        GROUP BY Codigo_Material, Codigo_Centro
     """  # nosec B608
     return read_sql(query, database="GOLD")
 
@@ -1284,6 +1696,68 @@ def top_clientes_por_vendedor(
         database="GOLD",
         params={"codigo_vendedor": codigo_vendedor, "data_inicio": data_inicio, "data_fim": data_fim},
     )
+
+
+def listar_vendedores() -> pd.DataFrame:
+    """Lista de vendedores cadastrados em `dim_vendedor_sf` — pra popular seletor de UI.
+
+    Não filtra por ter faturamento no período: é o cadastro completo (327 vendedores
+    medido em 2026-08-26), não um ranking. Ver `faturamento_por_vendedor` pra performance.
+    """
+    query = f"""
+        SELECT DISTINCT Codigo_Vendedor_SF AS Codigo_Vendedor, Nome_Vendedor_SF AS Nome_Vendedor
+        FROM {SCHEMA}.dim_vendedor_sf
+        WHERE Nome_Vendedor_SF IS NOT NULL
+        ORDER BY Nome_Vendedor_SF
+    """  # nosec B608
+    return read_sql(query, database="GOLD")
+
+
+def faturamento_vendedor_com_meta_bu(
+    data_inicio: Optional[date] = None, data_fim: Optional[date] = None, tipo_cliente: Optional[str] = None
+) -> pd.DataFrame:
+    """Faturamento real por vendedor, ao lado do Meta x Realizado da BU dele (aproximação).
+
+    **Não existe meta oficial por vendedor** na base — é decisão de planejamento por
+    Setor/BU numa planilha SharePoint (`vendas.fat_meta_equipe`), sem coluna de vendedor
+    (documentado em `docs/CONTEXTO_VENDAS_SAP.md` §8.2/§8.3; testado ao vivo, qualquer
+    aproximação por vendedor via hierarquia Salesforce cai pra 11-25% de cobertura). Essa
+    função **não inventa** uma meta individual: mostra o faturamento do vendedor lado a
+    lado com `Meta_Valor_BU`/`Valor_Realizado_BU`/`Atingimento_BU` — os 3 últimos são do
+    grupo (BU) inteiro, repetidos em toda linha de vendedor daquela BU, não uma fatia
+    calculada pra pessoa. `Unidade_Negocio` (a BU do vendedor) vem de `dim_vendedor_sf` e é
+    o metadado mais raso da dimensão — só ~25% dos vendedores têm isso preenchido (ver
+    `_vendedor_join_sql`); vendedor sem BU cadastrada cai em 'NAO ALOCADO', sem meta pra
+    comparar.
+
+    Args:
+        data_inicio, data_fim: período de `Data_Faturamento` (default: mês corrente).
+        tipo_cliente: "Governo" ou "Privado" (None = os dois).
+    """
+    if data_fim is None:
+        data_fim = date.today()
+    if data_inicio is None:
+        data_inicio = data_fim.replace(day=1)
+
+    df_vendedor = faturamento_por_vendedor(data_inicio, data_fim, tipo_cliente=tipo_cliente)
+    if df_vendedor.empty:
+        return df_vendedor
+
+    df_vendedor = df_vendedor.rename(columns={"Unidade_Negocio": "BU"})
+    df_vendedor["BU"] = df_vendedor["BU"].fillna("NAO ALOCADO")
+
+    df_meta = meta_vs_realizado_mensal(data_inicio=data_inicio, data_fim=data_fim)
+    if not df_meta.empty:
+        resumo_meta = df_meta.groupby("BU", as_index=False).agg(
+            Meta_Valor_BU=("Meta_Valor", "sum"), Valor_Realizado_BU=("Valor_Realizado", "sum")
+        )
+        resumo_meta["Atingimento_BU"] = (
+            resumo_meta["Valor_Realizado_BU"] / resumo_meta["Meta_Valor_BU"]
+        ).where(resumo_meta["Meta_Valor_BU"] > 0)
+    else:
+        resumo_meta = pd.DataFrame(columns=["BU", "Meta_Valor_BU", "Valor_Realizado_BU", "Atingimento_BU"])
+
+    return df_vendedor.merge(resumo_meta, on="BU", how="left")
 
 
 if __name__ == "__main__":
