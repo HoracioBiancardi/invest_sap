@@ -36,11 +36,12 @@ from scripts.query_vendas_sap import (  # noqa: E402
     top_clientes_pendentes,
 )
 from scripts.trace_pedido import trace_pedido  # noqa: E402
-from scripts.ui_theme import card  # noqa: E402
+from scripts.ui_theme import card, render_filtro_tipo_cliente  # noqa: E402
 
 st.set_page_config(page_title="Pedidos — Vendas SAP", page_icon="📦", layout="wide")
 st.title(":material/receipt_long: Pedidos")
 
+render_filtro_tipo_cliente()
 tipo_cliente_opcao = st.session_state.get("flt_tipo_cliente", "Todos")
 tipo_cliente = None if tipo_cliente_opcao == "Todos" else tipo_cliente_opcao
 
@@ -85,7 +86,7 @@ with tab_geral:
         "estoque reservado no SAP (`Qtd_Estoque_Reservada`, VBBE) por Material+Centro — "
         "sem filtro de material/cliente, pra achar em toda a base onde o backlog é muito "
         "maior que a reserva viva, sinal de pedido antigo nunca baixado/cancelado no SAP "
-        "(mesmo padrão achado manualmente no material PA5522, ver página **Visão 360**). "
+        "(mesmo padrão achado manualmente no material PA5522). "
         "Filtro de tipo de cliente do sidebar não se aplica aqui (mesmo motivo do aging acima: "
         "propósito é mostrar todo backlog aberto, inclusive o antigo)."
     )
@@ -175,7 +176,8 @@ with tab_geral:
             "`Qtd_Reservada` bem menor que `Qtd_Antigo` reforça a suspeita de pedido zumbi "
             "(reserva viva no SAP não cobre nem perto do backlog antigo). Não tratar como "
             "sinal de compra/produção sem confirmar com vendas/SAP — pra investigar 1 "
-            "material específico com o detalhe pedido a pedido, ver página **Visão 360**."
+            "material específico com o detalhe pedido a pedido, ver página **Pendência x "
+            "Estoque** (filtre por Material e clique num pedido)."
         )
 
     st.divider()

@@ -25,7 +25,7 @@ from scripts.query_vendas_sap import (  # noqa: E402
     faturamento_vendedor_mensal,
     top_clientes_por_vendedor,
 )
-from scripts.ui_theme import card  # noqa: E402
+from scripts.ui_theme import card, render_filtro_periodo_tipo_cliente  # noqa: E402
 
 st.set_page_config(page_title="Visão do Vendedor — Vendas SAP", page_icon="🧑‍💼", layout="wide")
 st.title(":material/badge: Visão do Vendedor")
@@ -39,6 +39,7 @@ st.caption(
     "performance/comissão individual sem checar essa fatia primeiro**."
 )
 
+render_filtro_periodo_tipo_cliente()
 tipo_cliente_opcao = st.session_state.get("flt_tipo_cliente", "Todos")
 tipo_cliente = None if tipo_cliente_opcao == "Todos" else tipo_cliente_opcao
 data_inicio = st.session_state.get(
@@ -46,8 +47,8 @@ data_inicio = st.session_state.get(
 )
 data_fim = st.session_state.get("flt_data_fim", datetime.date.today())
 st.caption(
-    f"Usando filtro global: período de **{data_inicio:%d/%m/%Y}** a **{data_fim:%d/%m/%Y}**, "
-    f"tipo de cliente **{tipo_cliente_opcao}** — ajuste no sidebar."
+    f"Filtro: período de **{data_inicio:%d/%m/%Y}** a **{data_fim:%d/%m/%Y}**, "
+    f"tipo de cliente **{tipo_cliente_opcao}**."
 )
 
 

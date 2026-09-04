@@ -225,7 +225,7 @@ def pendencia_x_estoque_global() -> pd.DataFrame:
     """Pendência (backlog aberto) cruzada com a simulação FIFO de estoque, pra TODOS os
     materiais/pedidos de uma vez — mesma ideia de `pedido_estoque_fatura_material` +
     aba "Simulação FIFO" da página Material, só que sem exigir filtrar por 1 material
-    (usada na página Pedidos, seção "Pendência x Estoque — visão completa").
+    (usada na página Pendência x Estoque — visão global).
 
     Grão: 1 linha por item de pedido pendente (`Flag_Pendencia = 1`). `(Numero_Pedido,
     Item_Pedido)` é chave única em `fct_pendencia_sap` e em `fct_pendencia_status_sap`
@@ -234,26 +234,168 @@ def pendencia_x_estoque_global() -> pd.DataFrame:
     da fila FIFO), 'SEM ESTOQUE' (não tem, nem simulando FIFO), 'CARIMBAGEM'/
     'EXC_COMERCIAL' (ver docstring de `alocacao_virtual_fifo`).
 
+    `Status_Pendencia_Estoque` (de `fct_pendencia_sap`, não confundir com
+    `Status_Alocacao_Virtual`): checagem direta *deste item* contra o estoque do
+    Material+Centro ('Pendente sem Estoque'/'Pendente com Estoque'/'Pendente com
+    Estoque Parcial') — mais granular que a simulação FIFO (que é por posição na fila,
+    Material+Centro). Usar esse pra classificar "motivo real" por item (ver página
+    Pendência x Estoque); `Status_Alocacao_Virtual` é mais pra explicar a ordem de
+    atendimento dentro do mesmo Material+Centro.
+
+    `Qtd_Pedida`/`Qtd_Remetida`/`Qtd_Faturada` (+ `Primeira_Data_Remessa`/`Ultima_Data_
+    Remessa`/`Primeira_Data_Faturamento`/`Ultima_Data_Faturamento`) explicam o "onde
+    está travado" por trás de `Status_Pendencia='Pendente Logistico e Fiscal'`/'Pendente
+    Fiscal (Faturamento)'/'Pendente Logistico (Remessa)' — comparar as 3 quantidades diz
+    se falta remessa, falta fatura sobre o que já foi remetido, ou as duas.
+
+    `Valor_Credito_Disponivel`/`Cliente_Bloqueado` vêm de `fct_limite_credito_sap`, pior
+    caso entre as áreas de crédito do cliente (mesmo padrão de
+    `pedido_estoque_fatura_material`) — achado de auditoria (`Cliente_Bloqueado`
+    isolado não é confiável, ver docs/CONTEXTO_VENDAS_SAP.md): cliente pode estar com
+    `Flag_Cliente_Bloqueado='N'` e `Valor_Credito_Disponivel` bem negativo mesmo assim;
+    tratar os dois campos juntos, nunca só a flag.
+
+    Achado de auditoria (2026-09-03): bloqueio comercial explícito do SAP
+    (`VBAK.LIFSK`/`FAKSK`, cabeçalho do pedido) tem só 82 pedidos preenchidos em TODO o
+    histórico da base — não é um motivo de volume relevante pro backlog atual (~41 mil
+    itens sem estoque), por isso não entra nesta consulta; ver `scripts/trace_lote.py`
+    se precisar investigar 1 pedido específico direto no HANA.
+
+    **Achado GRAVE de auditoria (2026-09-03, via página Pendência x Estoque — reportado
+    pelo usuário com pedidos reais 0000134668/0060008372/0060009216/0060011929)**:
+    `Flag_Pendencia=1` E `Flag_Totalmente_Faturado=1` ao mesmo tempo (logicamente
+    contraditório) em **23.981 dos 46.132 itens pendentes (52%, 141,7 milhões de
+    unidades — 84,5% de TODA a quantidade pendente da base)**. Mecanismo: `Qtd_Pendente_
+    Operacional`/`Status_Pendencia_Estoque` são calculados a partir de `Qtd_Remetida`
+    (Remessa), não de `Qtd_Faturada`; pedidos de devolução (`Tipo_Ordem_Venda` `ZREB`,
+    `ZROB`, `ZRSG`, `ZRES`, `ZRET`, `ZDV1`, `ZBON`, etc. — e também alguns tipos
+    "normais" como `ZVCO`/`ZIND`/`ZDES`/`UVCO`/`UNCR`/`UDEV`) nunca populam `Qtd_
+    Remetida` mesmo depois de 100% faturados/creditados, então ficam **PARA SEMPRE**
+    marcados `Status_Pendencia='Pendente Logistico (Remessa)'` e `Status_Pendencia_
+    Estoque='Pendente sem Estoque'` mesmo já concluídos. `Valor_Pendente_Faturamento`
+    fica 0 nesses casos (por isso os KPIs em R$ desta página não foram afetados), mas
+    `Qtd_Pendente_Operacional` continua alta — **qualquer métrica de QUANTIDADE
+    calculada sobre esta função, sem filtrar `Flag_Totalmente_Faturado`, está inflada
+    em ~5x**. Análogo ao bug de `VBAP.KWMENG=0` já documentado em
+    `docs/INVESTIGACAO_PENDENCIA_SAP.md`, mas mecanismo diferente (Remessa nunca
+    populada, não quantidade zerada) — reportar ao time de dados como novo achado, fix
+    correto é no cálculo de `Flag_Pendencia`/`Status_Pendencia_Estoque` em
+    `fct_pendencia_sap.sql` (repo `data-platform`), não aqui. Mitigação nesta função:
+    traz `Flag_Totalmente_Faturado` pra quem consumir poder filtrar.
+
     Sem parâmetros de propósito (evita o formato de risco documentado — filtro
     parametrizado + CTE/GROUP BY — do bug de plan cache do SQL Server); filtrar o
     resultado em pandas depois de trazer.
     """
     query = f"""
+        WITH credito_cliente AS (
+            -- Cliente pode ter 1 linha por Área de Controle de Crédito; pega o pior
+            -- caso (menor crédito disponível / bloqueado em qualquer área) — mesmo
+            -- padrão de `pedido_estoque_fatura_material`.
+            SELECT
+                Codigo_Cliente,
+                MIN(Valor_Credito_Disponivel) AS Valor_Credito_Disponivel,
+                MAX(CASE WHEN Flag_Cliente_Bloqueado = 'X' THEN 1 ELSE 0 END) AS Cliente_Bloqueado
+            FROM {SCHEMA}.fct_limite_credito_sap
+            GROUP BY Codigo_Cliente
+        )
         SELECT
             p.Numero_Pedido, p.Item_Pedido, p.Data_Inclusao_Pedido, p.Dias_Desde_Inclusao_Pedido,
             p.Codigo_Produto, p.Descricao_Produto, p.Codigo_Centro, p.Nome_Centro,
+            p.Codigo_Org_Vendas, p.Tipo_Ordem_Venda,
             p.Codigo_Cliente, p.Nome_Cliente,
+            p.Qtd_Pedida, p.Qtd_Remetida, p.Qtd_Faturada,
+            p.Primeira_Data_Remessa, p.Ultima_Data_Remessa,
+            p.Primeira_Data_Faturamento, p.Ultima_Data_Faturamento,
             p.Qtd_Pendente_Remessa, p.Qtd_Pendente_Operacional, p.Valor_Pendente_Faturamento,
-            p.Status_Pendencia,
+            p.Status_Pendencia, p.Status_Pendencia_Estoque, p.Flag_Totalmente_Faturado,
             s.Posicao_Fila_Prioridade, s.Qtd_Estoque_Disponivel_Planta,
-            s.Qtd_Estoque_Saldo_Virtual_Restante, s.Status_Alocacao_Virtual
+            s.Qtd_Estoque_Saldo_Virtual_Restante, s.Status_Alocacao_Virtual,
+            cr.Valor_Credito_Disponivel, cr.Cliente_Bloqueado
         FROM {SCHEMA}.fct_pendencia_sap p
         INNER JOIN {SCHEMA}.fct_pendencia_status_sap s
             ON p.Numero_Pedido = s.Numero_Pedido AND p.Item_Pedido = s.Item_Pedido
+        LEFT JOIN credito_cliente cr
+            ON p.Codigo_Cliente = cr.Codigo_Cliente
         WHERE p.Flag_Pendencia = 1
         ORDER BY p.Codigo_Produto, p.Codigo_Centro, s.Posicao_Fila_Prioridade
     """  # nosec B608
     return read_sql(query, database="GOLD")
+
+
+def organizacoes_vendas_texto() -> pd.DataFrame:
+    """Nome legível da Organização de Vendas (`Codigo_Org_Vendas` -> `Nome_Org_Vendas`).
+
+    Fonte: `SILVER.dataspherev2.tvkot` (texto de domínio SD, carregado 1x/dia em
+    `sd_master_daily_h11` — ver docs/CONTEXTO_VENDAS_SAP.md §5), filtrado a
+    `spras='P'` (português) — confirmado 1 linha por `vkorg` nesse idioma (sem fanout).
+    Tabela pequena (~10 linhas), sem necessidade de teto/filtro.
+    """
+    query = """
+        SELECT vkorg AS Codigo_Org_Vendas, vtext AS Nome_Org_Vendas
+        FROM dataspherev2.tvkot
+        WHERE spras = 'P'
+    """  # nosec B608
+    return read_sql(query, database="SILVER")
+
+
+def ficha_material(codigo_produto: str) -> pd.DataFrame:
+    """Dado cadastral de 1 material — `SELECT *` de `dim_material_sap` (grão Mandante+Produto).
+
+    Usado pela página Material, que virou uma "ficha de cadastro" pura (descrição, tipo,
+    status, unidade de medida, peso) desde 2026-09-04 — pedido/estoque/FIFO por material
+    saíram de lá por ficar redundante com a página Pendência x Estoque (ranking por
+    material + drill-down por pedido já cobre esse caso de uso, com classificação melhor).
+
+    `SELECT *` de propósito (não uma lista fixa de colunas): a página exibe o que vier,
+    genérico, pra não depender de conhecer o schema exato de `dim_material_sap` de
+    antemão — ver `docs/CONTEXTO_VENDAS_SAP.md` §3.1 pro que já se sabe sobre essa tabela
+    (fonte `mara`/`makt`, ~80 mil materiais, grão Mandante+Produto).
+
+    Args:
+        codigo_produto: código exato do material (ex.: 'PA5522').
+    """
+    query = f"""
+        SELECT *
+        FROM {SCHEMA}.dim_material_sap
+        WHERE Codigo_Produto = :produto
+    """  # nosec B608
+    return read_sql(query, database="GOLD", params={"produto": codigo_produto})
+
+
+def materiais_catalogo(somente_acabado: bool = True, filtro_nome: Optional[str] = None, limit: int = 3000) -> pd.DataFrame:
+    """Catálogo de materiais (`dim_material_sap`) pra navegar sem precisar já saber o código.
+
+    Cadastro completo tem ~80 mil materiais (na maioria matéria-prima/embalagem nunca
+    vendida a cliente) — por padrão filtra só produto acabado
+    (`TIPOS_MATERIAL_PRODUTO_ACABADO`, ~1.812 materiais), a fatia relevante pra navegação
+    comercial. Usado como visão default da página Material (sem exigir digitar um código),
+    sem duplicar quantidade/estoque (isso mora na página Estoque/Pendência x Estoque) —
+    só o dado de cadastro (descrição/tipo/status/unidade), igual `ficha_material`.
+
+    Args:
+        somente_acabado: True (default) filtra `Tipo_Material IN TIPOS_MATERIAL_PRODUTO_ACABADO`;
+            False traz o cadastro completo (~80 mil, cuidado com volume).
+        filtro_nome: filtro opcional por trecho de `Descricao_Produto` (LIKE, case-insensitive).
+        limit: teto de linhas.
+    """
+    filtros = []
+    params: dict[str, object] = {}
+    if somente_acabado:
+        filtros.append(f"Tipo_Material IN {TIPOS_MATERIAL_PRODUTO_ACABADO}")
+    if filtro_nome:
+        filtros.append("Descricao_Produto LIKE :nome")
+        params["nome"] = f"%{filtro_nome.strip()}%"
+    where = ("WHERE " + " AND ".join(filtros)) if filtros else ""
+    query = f"""
+        SELECT TOP {int(limit)}
+            Codigo_Produto, Descricao_Produto, Tipo_Material, Descricao_Tipo_Material,
+            Status_Material, Descricao_Status_Global_Material, Unidade_Medida_Base
+        FROM {SCHEMA}.dim_material_sap
+        {where}
+        ORDER BY CASE WHEN Descricao_Produto IS NULL THEN 1 ELSE 0 END, Descricao_Produto
+    """  # nosec B608
+    return read_sql(query, database="GOLD", params=params or None)
 
 
 def pedido_estoque_fatura_material(
@@ -336,19 +478,50 @@ def pedido_estoque_fatura_material(
     return read_sql(query, database="GOLD", params={"produto": codigo_produto})
 
 
-def cliente_360(codigo_cliente: str, somente_pendente: bool = False) -> dict[str, pd.DataFrame]:
-    """Visão 360º de 1 cliente: pedido/pendência/fatura + crédito + devoluções, juntos.
+def buscar_cliente_por_nome(nome_fragmento: str, limit: int = 30) -> pd.DataFrame:
+    """Busca `Codigo_Cliente`/`Nome_Cliente` por trecho do nome (LIKE, case-insensitive).
+
+    Fonte: `dim_cliente_sap` (grão Cliente+OrgVendas+Canal+Setor — teria repetição de
+    Codigo_Cliente por dimensão comercial, por isso o `SELECT DISTINCT`). Usado pra achar
+    o código exato de um cliente sem precisar ir a outra página primeiro (ex.: página
+    Cliente 360).
+
+    Args:
+        nome_fragmento: trecho do nome (mínimo 1 caractere, mas poucos caracteres trazem
+            muito resultado — a página que chama isso deve ter um teto de exibição).
+        limit: teto de linhas.
+    """
+    query = f"""
+        SELECT DISTINCT TOP {int(limit)} Codigo_Cliente, Nome_Cliente
+        FROM {SCHEMA}.dim_cliente_sap
+        WHERE Nome_Cliente LIKE :nome_fragmento
+        ORDER BY Nome_Cliente
+    """  # nosec B608
+    return read_sql(query, database="GOLD", params={"nome_fragmento": f"%{nome_fragmento.strip()}%"})
+
+
+def cliente_360(codigo_cliente: str, somente_pendente: bool = False, meses_historico: int = 24) -> dict[str, pd.DataFrame]:
+    """Visão 360º de 1 cliente: pedido/pendência/fatura + crédito + devoluções +
+    Oportunidade (Salesforce) + Remessa, juntos.
 
     Mesmo espírito de `pedido_estoque_fatura_material` (ver "tudo" sobre 1 valor de busca),
     só que por `Codigo_Cliente` em vez de material — e devolve um dict de DataFrames (não 1
-    tabela só), porque pedido/crédito/devolução têm grãos diferentes demais pra juntar numa
-    única linha sem duplicar (ex.: crédito é 1 linha por Área de Controle, devolução é por
-    lançamento contábil) — mesmo padrão de `scripts/trace_pedido.py::trace_pedido`.
+    tabela só), porque pedido/crédito/devolução/oportunidade/remessa têm grãos diferentes
+    demais pra juntar numa única linha sem duplicar (ex.: crédito é 1 linha por Área de
+    Controle, devolução é por lançamento contábil) — mesmo padrão de
+    `scripts/trace_pedido.py::trace_pedido`.
+
+    `Oportunidade`/`Remessa` reusam `correlacao_oportunidade_pedido_pendencia_fatura()`/
+    `remessas()` (mesmas fontes de `visao_360_material_cliente`, que faz o mesmo cruzamento
+    por material+cliente) — aqui só por cliente, sem exigir material.
 
     Args:
         codigo_cliente: código exato do cliente.
         somente_pendente: se True, a aba de pedidos traz só backlog aberto
             (`Flag_Pendencia = 1`); default False traz o histórico completo do cliente.
+        meses_historico: janela (meses, até hoje) usada nas abas Oportunidade e Remessas —
+            Pedido/Crédito/Devolução não têm esse limite (Pedido é histórico completo do
+            cliente; Devolução já é fixa em 12 meses; Crédito é foto de hoje).
     """
     where_pendencia = " AND Flag_Pendencia = 1" if somente_pendente else ""
     pedidos_query = f"""
@@ -366,10 +539,20 @@ def cliente_360(codigo_cliente: str, somente_pendente: bool = False) -> dict[str
         codigo_cliente=codigo_cliente,
         limit=500,
     )
+
+    data_fim = date.today()
+    data_inicio = data_fim - timedelta(days=meses_historico * 30)
+    df_oportunidade = correlacao_oportunidade_pedido_pendencia_fatura(
+        data_inicio=data_inicio, data_fim=data_fim, apenas_pendentes=False, codigo_cliente=codigo_cliente, limit=20000
+    )
+    df_remessas = remessas(codigo_cliente=codigo_cliente, data_inicio=data_inicio, data_fim=data_fim, limit=2000)
+
     return {
         "Pedido / Pendência / Fatura": df_pedidos,
         "Crédito": df_credito,
         "Devoluções / abatimentos (últimos 12 meses)": df_devolucoes,
+        "Oportunidade": df_oportunidade,
+        "Remessas": df_remessas,
     }
 
 
@@ -1455,6 +1638,50 @@ def estoque_reservado_por_material_centro() -> pd.DataFrame:
         GROUP BY Codigo_Material, Codigo_Centro
     """  # nosec B608
     return read_sql(query, database="GOLD")
+
+
+def movimento_estoque_resumo_material_centro(meses: int = 24) -> pd.DataFrame:
+    """Resumo de movimentação (MSEG/MKPF) por Material+Centro — última entrada/liberação/saída.
+
+    Fonte: `SILVER.dataspherev2.mseg`/`mkpf` (grão de evento), diferente de todo o resto de
+    `query_vendas_sap.py` que lê de GOLD — não existe hoje uma tabela GOLD com histórico de
+    movimento (ver `scripts/trace_lote.py` e docs/CONTEXTO_VENDAS_SAP.md §6.4). Serve pra
+    explicar o "por quê" de `Status_Alocacao_Virtual = 'SEM ESTOQUE'` em
+    `pendencia_x_estoque_global()`: se nunca teve entrada, se está preso em qualidade, ou se
+    teve saída recente (girando) mesmo sem estoque livre agora.
+
+    Bwart usados: `101`/`861` (entrada por produção/transferência entre centros), `321`
+    (liberação Qualidade → Livre), `601` (saída p/ remessa/venda) — ver mapa completo em
+    `scripts/trace_lote.py::DESCRICAO_BWART`.
+
+    Performance: `mseg` é columnstore (~3M linhas) sem índice que acelere filtro por
+    material — testado ao vivo (2026-09-03): filtrar por lista de materiais não é mais
+    rápido que trazer tudo (o custo é do JOIN+GROUP BY, não da seletividade do filtro), e
+    IN-list grande (30+ valores) é ainda mais lento que sem filtro. Por isso, sem parâmetro
+    de material: agrega TUDO de uma vez (~90s numa janela de 24 meses) e filtra em pandas
+    depois — mesmo padrão de `pendencia_x_estoque_global()`. Cachear com TTL alto (>=1800s)
+    na página, não os 300s padrão de outras consultas desta tela.
+
+    Args:
+        meses: janela de `budat` (data de lançamento) considerada, em meses pra trás.
+            Movimento de 2014 não ajuda a explicar backlog aberto hoje; reduzir a janela é
+            o que torna a consulta viável nesse volume de linhas.
+    """
+    query = f"""
+        SELECT
+            s.matnr AS Codigo_Produto,
+            s.werks AS Codigo_Centro,
+            MAX(CASE WHEN s.bwart IN ('101', '861') THEN k.budat END) AS Data_Ultima_Entrada,
+            MAX(CASE WHEN s.bwart = '321' THEN k.budat END) AS Data_Ultima_Liberacao_Qualidade,
+            MAX(CASE WHEN s.bwart = '601' THEN k.budat END) AS Data_Ultima_Saida,
+            MAX(k.budat) AS Data_Ultimo_Movimento
+        FROM dataspherev2.mseg s
+        JOIN dataspherev2.mkpf k
+            ON s.mandt = k.mandt AND s.mblnr = k.mblnr AND s.mjahr = k.mjahr
+        WHERE k.budat >= DATEADD(month, :meses_neg, CAST(GETDATE() AS date))
+        GROUP BY s.matnr, s.werks
+    """  # nosec B608
+    return read_sql(query, database="SILVER", params={"meses_neg": -abs(int(meses))})
 
 
 def faturamento_mensal(meses: int = 12) -> pd.DataFrame:

@@ -1,5 +1,5 @@
 """Painel de filtros de recorte compartilhado pelas páginas de Faturamento (Painel Vendas)
-— `pages/12_Faturamento_vs_Meta.py` a `pages/15_Produto_Cliente.py`.
+— `pages/12_Painel_Vendas.py` a `pages/15_Produto_Cliente.py`.
 
 **Exceção deliberada** à convenção do resto de `scripts/` (só consulta, sem `streamlit`):
 as 4 páginas acima precisavam do mesmo painel de ~10 `st.selectbox` lado a lado; duplicar

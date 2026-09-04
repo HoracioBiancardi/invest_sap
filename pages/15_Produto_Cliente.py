@@ -2,7 +2,7 @@
 
 Inspirada na página "Visão Produto | Cliente" do Painel Vendas (Power BI). Reusa
 scripts/query_faturamento_comercial.py — mesma fonte/caveat de
-pages/12_Faturamento_vs_Meta.py, ver docs/CONTEXTO_VENDAS_SAP.md §10.
+pages/12_Painel_Vendas.py, ver docs/CONTEXTO_VENDAS_SAP.md §10.
 """
 
 from __future__ import annotations
@@ -23,13 +23,13 @@ from scripts.query_faturamento_comercial import (  # noqa: E402
     skus_ativos_periodo,
 )
 from scripts.ui_filtros_comercial import render_filtros_comercial  # noqa: E402
-from scripts.ui_theme import card  # noqa: E402
+from scripts.ui_theme import card, render_filtro_tipo_cliente  # noqa: E402
 
 st.set_page_config(page_title="Produto | Cliente — Vendas Comercial", page_icon="🧪", layout="wide")
 st.title(":material/category: Visão Produto | Cliente")
 st.caption(
     "Fonte: `GOLD.vendas_sap.fct_faturamento_itens_sap` — mesma fonte/caveat de "
-    "**Faturamento vs Meta**, ver `docs/CONTEXTO_VENDAS_SAP.md` §10. **Família** vem de "
+    "**Painel Vendas**, ver `docs/CONTEXTO_VENDAS_SAP.md` §10. **Família** vem de "
     "`vendas.dim_produto` (mapeamento SharePoint, ~316 materiais, ainda pequeno e "
     "instável — produto sem match cai em 'NAO INFORMADO')."
 )
@@ -38,6 +38,7 @@ meses = st.slider("Janela (meses)", min_value=3, max_value=24, value=12, step=1)
 hoje = datetime.date.today()
 data_inicio = (hoje.replace(day=1) - pd.DateOffset(months=meses - 1)).date()
 
+render_filtro_tipo_cliente()
 tipo_cliente_opcao = st.session_state.get("flt_tipo_cliente", "Todos")
 tipo_cliente = None if tipo_cliente_opcao == "Todos" else tipo_cliente_opcao
 

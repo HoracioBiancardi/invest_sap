@@ -146,8 +146,9 @@ uv run streamlit run app.py
 
 Abre em `http://localhost:8501`. Ctrl+C no terminal encerra o servidor.
 
-`app.py` não tem conteúdo próprio (2026-08-25) — é só um router (`st.navigation`) que monta
-o menu lateral em 3 seções + o filtro global (ver §9.1). O conteúdo de cada página vive em
+`app.py` não tem conteúdo próprio — é só um router (`st.navigation`) que monta o menu
+lateral em 3 seções (2026-08-25); o filtro de Período/Tipo de cliente não mora mais aqui,
+foi movido pra dentro de cada página que usa (ver §9.1). O conteúdo de cada página vive em
 `pages/*.py`. Tema visual em `.streamlit/config.toml` (cor/fonte — ver §9.2).
 
 A separação entre **📊 Dashboards** e **💰 Faturamento (Painel Vendas)** não é estética: são
@@ -189,9 +190,7 @@ gráfico/tabela — não confundir com o seletor "Quebrar por", que muda o que a
 
 | Página | Reusa | O que mostra |
 |---|---|---|
-| `pages/12_Faturamento_vs_Meta.py` | `scripts/query_faturamento_comercial.py` | Gauges MTD/YTD, evolução diária/mensal/trimestral, Meta x Realizado por Canal/Linha de Negócio/Divisional/Regional/Distrital/Setor/Família |
-| `pages/13_Faturamento_Diario.py` | `scripts/query_faturamento_comercial.py` | Faturamento do dia/MTD, quebra por dimensão comercial e por Estado (UF) — sempre olha o mês corrente, não o filtro global de dias |
-| `pages/14_Faturamento_Anual.py` | `scripts/query_faturamento_comercial.py` | Comparativo YoY (YTD ano corrente x YTD ano anterior x ano anterior inteiro) por dimensão comercial, + top clientes YTD |
+| `pages/12_Painel_Vendas.py` | `scripts/query_faturamento_comercial.py` | 3 abas (fundidas em 2026-09-04, cada 1 com filtro de recorte próprio): **MTD/YTD/Trimestral** — gauges + Meta x Realizado por Canal/Linha de Negócio/Divisional/Regional/Distrital/Setor/Família; **Diário** — dia/MTD + Estado (UF), sempre mês corrente (não o filtro global); **Anual (YoY)** — comparativo YTD ano corrente x ano anterior + top clientes |
 | `pages/15_Produto_Cliente.py` | `scripts/query_faturamento_comercial.py` | Faturamento e preço médio por mês, SKUs vendidos/clientes atendidos por mês, ranking mensal (matriz) e média dos últimos 6 meses por Cliente/Família/Produto |
 | `pages/17_Relatorio_Analitico.py` | `scripts/query_faturamento_comercial.py` | Detalhe linha a linha (1 linha = 1 item de fatura) com seletor de colunas — a única que não agrega. Consulta mais pesada (join linha a linha via `dim_material_sap` pra "Nome Produto", resolvido em 2 passos — ver `CONTEXTO_VENDAS_SAP.md` §6.10) |
 | `pages/17_Relatorio_Analitico.py` | `scripts/query_faturamento_comercial.py` | Detalhe linha a linha (1 linha = 1 item de fatura) com seletor de colunas (`st.multiselect`) — diferente das outras 4, não agrega. Período livre (não é MTD/YTD fixo) |
@@ -207,23 +206,39 @@ precisam de um valor específico (número de pedido, tabela SAP) pra fazer senti
 | `pages/4_DDIC_Lookup.py` | `scripts/ddic_lookup.py` | Consulta de tabela/campo SAP |
 | `pages/9_Conectividade.py` | `scripts/db.py` | Botão de conectividade (SQL Server BRONZE/SILVER/GOLD + HANA) — movida da Home (2026-08-25), é diagnóstico técnico, não KPI de negócio |
 
-### 9.1 Filtro global (sidebar)
+### 9.1 Filtro de Período + Tipo de cliente (local a cada página, não mais no sidebar)
 
-`app.py` renderiza 2 widgets no sidebar, acima do menu de navegação, com `key` fixa:
-`st.session_state["flt_dias"]` (número, default 30) e `st.session_state["flt_tipo_cliente"]`
-(`"Todos"`/`"Governo"`/`"Privado"`, default `"Todos"`). Como `session_state` persiste entre
-páginas na mesma sessão, qualquer página em `pages/*.py` pode ler esses valores direto:
+Até 2026-09-04 isso vivia sozinho na sidebar de `app.py` ("filtro global"), afetando 9
+páginas sem ficar visível em nenhuma delas — confuso (setava o filtro num lugar, via o
+efeito em outro). Agora cada página que usa chama uma função de
+`scripts/ui_theme.py` no topo do próprio corpo:
+
+- `render_filtro_periodo_tipo_cliente()` — Período (`st.date_input` com range) + Tipo de
+  cliente. Usada por: Oportunidade, Faturamento, Vendedor, Crédito e Devoluções, Vendedor x
+  Meta x Faturamento.
+- `render_filtro_tipo_cliente()` — só Tipo de cliente (a página tem sua própria janela de
+  tempo, período não faria sentido). Usada por: Pedidos, Painel Vendas, Produto/Cliente,
+  Relatório Analítico.
+
+As duas escrevem nas MESMAS chaves de `st.session_state` (`flt_data_inicio`/`flt_data_fim`/
+`flt_tipo_cliente`) — é o mesmo widget/estado compartilhado entre todas as páginas que
+chamam uma das duas funções, só renderizado localmente em cada uma, não um filtro isolado
+por página. Qualquer página lê os valores do jeito de sempre:
 
 ```python
-dias = st.session_state.get("flt_dias", 30)
+from scripts.ui_theme import render_filtro_periodo_tipo_cliente
+
+render_filtro_periodo_tipo_cliente()  # ou render_filtro_tipo_cliente(), se não usa período
+data_inicio = st.session_state.get("flt_data_inicio", datetime.date.today() - datetime.timedelta(days=30))
+data_fim = st.session_state.get("flt_data_fim", datetime.date.today())
 tipo_cliente_opcao = st.session_state.get("flt_tipo_cliente", "Todos")
 tipo_cliente = None if tipo_cliente_opcao == "Todos" else tipo_cliente_opcao
 ```
 
-Nem toda página usa os dois — Estoque não usa nenhum (sem dimensão de cliente/data),
-Pendências usa só tipo de cliente (dias esconderia backlog antigo, que é o mais importante
-de ver). Antes de aplicar o filtro global numa página nova, pense se `dias` faz sentido pro
-que ela mostra — não é automático.
+Nem toda página usa — Estoque não usa nenhum (sem dimensão de cliente/data). Antes de
+aplicar numa página nova, pense se período faz sentido pro que ela mostra — não é
+automático (ex.: Pedidos mostra backlog aberto, que não pode esconder pedido antigo por
+trás de uma janela de dias).
 
 `tipo_cliente` chega até `scripts/query_vendas_sap.py` via dois helpers reusados por várias
 funções: `_filtro_dias_tipo_cliente` (quando a query já tem a chave composta de

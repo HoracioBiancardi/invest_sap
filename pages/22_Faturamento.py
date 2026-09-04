@@ -27,19 +27,20 @@ from scripts.query_vendas_sap import (  # noqa: E402
     faturamento_mensal,
     faturamento_por_org_vendas_linha_negocio,
 )
-from scripts.ui_theme import card  # noqa: E402
+from scripts.ui_theme import card, render_filtro_periodo_tipo_cliente  # noqa: E402
 
 st.set_page_config(page_title="Faturamento — Vendas SAP", page_icon="💰", layout="wide")
 st.title(":material/payments: Faturamento")
 
+render_filtro_periodo_tipo_cliente()
 tipo_cliente_opcao = st.session_state.get("flt_tipo_cliente", "Todos")
 tipo_cliente = None if tipo_cliente_opcao == "Todos" else tipo_cliente_opcao
 data_inicio = st.session_state.get("flt_data_inicio", datetime.date.today() - datetime.timedelta(days=30))
 data_fim = st.session_state.get("flt_data_fim", datetime.date.today())
 st.caption(
-    f"Usando filtro global: período de **{data_inicio:%d/%m/%Y}** a **{data_fim:%d/%m/%Y}**, "
-    f"tipo de cliente **{tipo_cliente_opcao}** — ajuste no sidebar. A série mensal abaixo "
-    "ignora esse período de propósito (mostra tendência de mais longo prazo)."
+    f"Filtro: período de **{data_inicio:%d/%m/%Y}** a **{data_fim:%d/%m/%Y}**, "
+    f"tipo de cliente **{tipo_cliente_opcao}**. A série mensal abaixo ignora esse período "
+    "de propósito (mostra tendência de mais longo prazo)."
 )
 
 tab_resumo, tab_tendencia = st.tabs(["Org Vendas x Linha de Negócio", "Tendência mensal"])

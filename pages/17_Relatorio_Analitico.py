@@ -2,7 +2,7 @@
 
 Réplica funcional da página "Relatório Analítico" do Painel Vendas (Power BI, com o "Filtro
 Colunas Relatório"). Reusa scripts/query_faturamento_comercial.py — mesma fonte/caveat de
-pages/12_Faturamento_vs_Meta.py, ver docs/CONTEXTO_VENDAS_SAP.md §10.
+pages/12_Painel_Vendas.py, ver docs/CONTEXTO_VENDAS_SAP.md §10.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from scripts.query_faturamento_comercial import (  # noqa: E402
     relatorio_analitico,
 )
 from scripts.ui_filtros_comercial import render_filtros_comercial  # noqa: E402
-from scripts.ui_theme import card  # noqa: E402
+from scripts.ui_theme import card, render_filtro_tipo_cliente  # noqa: E402
 
 st.set_page_config(
     page_title="Relatório Analítico — Vendas Comercial", page_icon="🔬", layout="wide"
@@ -32,7 +32,7 @@ st.set_page_config(
 st.title(":material/query_stats: Relatório Analítico")
 st.caption(
     "Fonte: `GOLD.vendas_sap.fct_faturamento_itens_sap` — mesma fonte/caveat de "
-    "**Faturamento vs Meta**, ver `docs/CONTEXTO_VENDAS_SAP.md` §10. Detalhe linha a linha "
+    "**Painel Vendas**, ver `docs/CONTEXTO_VENDAS_SAP.md` §10. Detalhe linha a linha "
     "(1 linha = 1 item de fatura) — as outras páginas de Faturamento sempre agregam, esta não."
 )
 st.caption(
@@ -41,6 +41,7 @@ st.caption(
     "`docs/CONTEXTO_VENDAS_SAP.md` §6.10 se um número parecer implausível."
 )
 
+render_filtro_tipo_cliente()
 tipo_cliente_opcao = st.session_state.get("flt_tipo_cliente", "Todos")
 tipo_cliente = None if tipo_cliente_opcao == "Todos" else tipo_cliente_opcao
 

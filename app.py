@@ -8,8 +8,8 @@ Conteúdo de cada página está em pages/*.py; este arquivo define a estrutura d
 antes das seções colapsáveis —, seguida de 3 seções: Executivo, Faturamento (Painel Vendas)
 e Técnico — ver docs/COMO_RODAR.md §9).
 
-**Executivo** reúne as 13 visões de portfólio (Visão 360, Oportunidade, Pedidos, Pendência
-x Estoque, Remessas, Faturamento, Faturamento x Meta, Estoque, Material, Cliente 360,
+**Executivo** reúne as 12 visões de portfólio (Pendência x Estoque, Oportunidade, Pedidos,
+Remessas, Faturamento, Faturamento x Meta, Estoque, Material, Cliente 360,
 Crédito e Devoluções, Vendedor, Vendedor x Meta x Faturamento) — todas sobre o total bruto
 de `vendas_sap`. **Faturamento (Painel Vendas)**
 passa pelas mesmas tabelas fonte só que via o crosswalk comercial cliente→setor
@@ -18,41 +18,24 @@ docs/CONTEXTO_VENDAS_SAP.md §10 — não é só organização visual, são *con
 sobre a mesma fonte. **Técnico** é ferramenta de investigação pontual (Auditoria do Fluxo),
 não uso recorrente.
 
-Filtro global (período de datas + Governo x Privado) que as páginas leem via
-`st.session_state["flt_data_inicio"]`/`st.session_state["flt_data_fim"]`/
-`st.session_state["flt_tipo_cliente"]` — ver docs/COMO_RODAR.md §9.1. Reusa os módulos em
-scripts/ (mesma lógica de conexão e consultas dos CLIs) — não duplica SQL, só troca
-print()/tabela de texto por uma tela. Ver docs/CONTEXTO_VENDAS_SAP.md para o significado
-das tabelas.
+Filtro de Período + Tipo de cliente (Governo x Privado): até 2026-09-04 vivia sozinho na
+sidebar ("filtro global"), afetando 9 páginas sem ficar visível em nenhuma delas. Movido
+pra dentro de cada página que usa (`scripts/ui_theme.py::render_filtro_periodo_tipo_cliente`/
+`render_filtro_tipo_cliente`, chamado no topo do corpo de cada uma) — mesmas chaves de
+`st.session_state` (`flt_data_inicio`/`flt_data_fim`/`flt_tipo_cliente`), então o valor
+continua compartilhado entre as páginas que chamam uma das duas funções, só não mora mais
+neste arquivo. Ver docs/COMO_RODAR.md §9.1. Reusa os módulos em scripts/ (mesma lógica de
+conexão e consultas dos CLIs) — não duplica SQL, só troca print()/tabela de texto por uma
+tela. Ver docs/CONTEXTO_VENDAS_SAP.md para o significado das tabelas.
 """
 
 from __future__ import annotations
-
-import datetime
 
 import streamlit as st
 
 from scripts.ui_theme import apply_custom_theme
 
 apply_custom_theme()
-
-with st.sidebar:
-    st.markdown("#### :material/filter_alt: Filtro global")
-    st.caption("Vale para Oportunidade, Pedidos, Crédito/Devoluções, Faturamento e Vendedor.")
-    _hoje = datetime.date.today()
-    _periodo = st.date_input(
-        "Período",
-        value=(_hoje - datetime.timedelta(days=30), _hoje),
-        max_value=_hoje,
-        key="flt_periodo",
-    )
-    # date_input com range retorna tupla de 1 elemento enquanto o usuário só escolheu a
-    # data inicial (segunda ponta ainda não selecionada) — só atualiza o filtro global
-    # quando o range vier completo; até lá, mantém o valor anterior (ou o default).
-    if isinstance(_periodo, tuple) and len(_periodo) == 2:
-        st.session_state["flt_data_inicio"], st.session_state["flt_data_fim"] = _periodo
-    st.selectbox("Tipo de cliente", ["Todos", "Governo", "Privado"], key="flt_tipo_cliente")
-    st.divider()
 
 pg = st.navigation(
     {
@@ -64,9 +47,6 @@ pg = st.navigation(
                 "pages/27_Pendencia_x_Estoque.py",
                 title="Pendência x Estoque",
                 icon=":material/pending_actions:",
-            ),
-            st.Page(
-                "pages/26_Visao_360.py", title="Visão 360", icon=":material/hub:"
             ),
             st.Page(
                 "pages/19_Oportunidade.py", title="Oportunidade", icon=":material/target:"
@@ -110,19 +90,9 @@ pg = st.navigation(
         ],
         "Faturamento (Painel Vendas)": [
             st.Page(
-                "pages/12_Faturamento_vs_Meta.py",
-                title="Faturamento vs Meta",
+                "pages/12_Painel_Vendas.py",
+                title="Painel Vendas",
                 icon=":material/speed:",
-            ),
-            st.Page(
-                "pages/13_Faturamento_Diario.py",
-                title="Faturamento Diário",
-                icon=":material/calendar_today:",
-            ),
-            st.Page(
-                "pages/14_Faturamento_Anual.py",
-                title="Faturamento Anual (YoY)",
-                icon=":material/calendar_month:",
             ),
             st.Page(
                 "pages/15_Produto_Cliente.py", title="Produto / Cliente", icon=":material/category:"

@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.query_vendas_sap import correlacao_oportunidade_pedido_pendencia_fatura  # noqa: E402
 from scripts.ui_filtros_executivo import render_filtros_executivo  # noqa: E402
-from scripts.ui_theme import card  # noqa: E402
+from scripts.ui_theme import card, render_filtro_periodo_tipo_cliente  # noqa: E402
 
 st.set_page_config(page_title="Oportunidade — Vendas SAP", page_icon="🎯", layout="wide")
 st.title(":material/target: Oportunidade")
@@ -37,12 +37,13 @@ st.caption(
     "no denominador de 'conversão'."
 )
 
+render_filtro_periodo_tipo_cliente()
 data_inicio = st.session_state.get("flt_data_inicio", datetime.date.today() - datetime.timedelta(days=30))
 data_fim = st.session_state.get("flt_data_fim", datetime.date.today())
 tipo_cliente_opcao = st.session_state.get("flt_tipo_cliente", "Todos")
 st.caption(
-    f"Usando filtro global: período de **{data_inicio:%d/%m/%Y}** a **{data_fim:%d/%m/%Y}**, "
-    f"tipo de cliente **{tipo_cliente_opcao}** — ajuste no sidebar."
+    f"Filtro: período de **{data_inicio:%d/%m/%Y}** a **{data_fim:%d/%m/%Y}**, "
+    f"tipo de cliente **{tipo_cliente_opcao}**."
 )
 
 filtros = render_filtros_executivo("oportunidade", mostrar_pedido=True)

@@ -538,3 +538,62 @@ faturamento real associado (achado original da investigação, ainda válido).
 - **`OPTION (RECOMPILE)`** aparece na maioria das consultas deste módulo — não é estilo, é
   correção de um bug real de plano cacheado do SQL Server (ver §6.10). Não remover sem
   reconferir o resultado contra uma soma calculada de outro jeito.
+
+## 11. Estoque histórico: `MCHBH`/`MBEWH` (real, via HANA) e proposta de `fct_movimento_lote_sap`
+
+Investigação ao vivo em 2026-09-03 (dashboard `invest_sap`, página **Pendência x Estoque**
+→ aba **Rastreio de Lote**/drill-down "estoque na data do pedido"), motivada por um usuário
+questionando por que um pedido aparecia "sem estoque" quando ele lembrava do material ter
+estoque na época. Duas descobertas ficaram maduras o bastante pra virar candidatas a modelo
+GOLD — registradas aqui pra quando alguém for propor isso no `data-platform`.
+
+### 11.1 `IB_SAPECC.MCHBH`/`MBEWH` já existem no HANA, com dado real — não estão na ingestão
+
+`MCHBH` ("Estoques de lotes - histórico") e `MBEWH` ("Avaliação de material - histórico")
+são views no schema `IB_SAPECC` do HANA/Datasphere, com dado real (798.364 e 1.816.404
+linhas respectivamente, contadas ao vivo) — **mas não fazem parte de nenhum grupo de
+ingestão** da tabela da seção 5 (`sd_hourly_h10`, `mm_daily_X`, etc.). Ou seja: o dado
+existe e é acessível hoje via `read_hana_sql()` direto (mesma conexão de
+`scripts/ddic_lookup.py`), mas nunca chega em `BRONZE`/`SILVER`/`GOLD`.
+
+**O que são**: snapshot de FECHAMENTO DE PERÍODO (`LFGJA`+`LFMON`, ano+mês), calculado pelo
+próprio SAP — não uma reconstrução externa. `MCHBH` tem grão Mandante+Material+Centro+
+Depósito+Lote+Período, com as mesmas colunas de quantidade de `MCHB` (`CLABS`=livre,
+`CINSM`=qualidade, `CSPEM`=bloqueado, `CUMLM`=em trânsito, `CEINM`=uso restrito,
+`CRETM`=devolução bloqueada). `MBEWH` é o equivalente pra valorização/custo (`MBEW`
+histórico).
+
+**Por que importa pra mais de 1 visão**:
+- **Estoque numa data passada** (o caso que motivou a descoberta): consulta real, granularidade
+  de mês fechado, ~5-10s por Material+Centro. Já implementado em
+  `scripts/trace_lote.py::estoque_historico_material_centro()` — substituiu uma estimativa via
+  soma de `MSEG`/`MKPF` que dava número errado (calibração quebrava quando o material já tinha
+  estoque antes do início da réplica de `MSEG`, ~2024).
+- **Auditoria/reconciliação**: comparar `fct_estoque_lote_sap` (foto de hoje) contra o
+  fechamento do mês anterior em `MCHBH` pra ver se a variação bate com o que `MSEG` registrou
+  no meio do caminho — detectaria lacuna/erro de replicação sem precisar confiar cegamente
+  numa única fonte.
+- **Valorização histórica** (`MBEWH`, ainda não explorado): margem/custo num pedido antigo
+  específico, sem depender do custo *atual* de `fct_estoque_lote_sap.Valor_Custo_Unitario`
+  (que já teve achado de bug de `PEINH`, ver §6.9) — útil pra reconstruir margem "como era
+  na época" em vez de com o custo de hoje.
+- **Séries temporais de estoque** (mês a mês) pra material/família, sem precisar reconstruir
+  nada — é só agrupar por período.
+
+**Se o uso crescer**: candidato a ingestão formal (`data-platform`) — deixaria essas
+consultas em GOLD normal em vez de HANA ao vivo (mais rápido, sem depender de VPN). Spec
+completa (config de Bronze, SQL dos 2 models Silver, schema real de `MCHBH`/`MBEWH`
+verificado ao vivo) em **`docs/PROPOSTA_INGESTAO_MOVIMENTO_ESTOQUE.md`** (Parte A).
+
+### 11.2 Proposta (não construída): `fct_movimento_lote_sap` — histórico de movimento por lote
+
+Nenhuma tabela GOLD guarda hoje a timeline de eventos de um lote (produção → transferência →
+qualidade → liberação → venda) — só o estado atual (`fct_estoque_lote_sap`, sem histórico) ou
+o fechamento mensal agregado (`MCHBH`, sem o evento individual). O rastreio de lote do
+dashboard (`scripts/trace_lote.py::trace_lote()`) hoje resolve isso lendo
+`SILVER.dataspherev2.mseg`/`mkpf` direto, sem passar por GOLD — funciona, mas é uma consulta
+ad hoc de app, não um model reutilizável por outros dashboards/relatórios.
+
+Design completo (grão, campos, casos de uso, nota de performance/volume) em
+**`docs/PROPOSTA_INGESTAO_MOVIMENTO_ESTOQUE.md`** (Parte B) — não depende da Parte A, a
+fonte (`mseg`/`mkpf`) já está ingerida.

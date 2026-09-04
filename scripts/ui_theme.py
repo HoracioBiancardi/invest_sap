@@ -25,6 +25,7 @@ o jeito certo de ter uma marca acima do menu, não um hack de CSS `order`.
 
 from __future__ import annotations
 
+import datetime as _dt
 import re
 from pathlib import Path
 
@@ -100,6 +101,36 @@ div[data-testid="stButton"] > button {
 }
 div[data-testid="stButton"] > button:hover {
     filter: brightness(1.15);
+}
+
+/* Spinner de carregamento (st.spinner()/show_spinner="...") com a cor de destaque do app
+   em vez do ícone cinza padrão do Streamlit. Não troca a estrutura/texto — só esconde o
+   ícone original (`stSpinnerIcon`, mantendo a caixa/alinhamento) e desenha um anel
+   giratório próprio no lugar dele via `::before`. */
+div[data-testid="stSpinnerIcon"] {
+    visibility: hidden;
+    position: relative;
+}
+div[data-testid="stSpinnerIcon"]::before {
+    content: "";
+    visibility: visible;
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 1rem;
+    height: 1rem;
+    border-radius: 50%;
+    border: 2px solid var(--surface-border);
+    border-top-color: var(--accent);
+    animation: bmt-spin 0.7s linear infinite;
+}
+@keyframes bmt-spin {
+    to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+    div[data-testid="stSpinnerIcon"]::before {
+        animation: none;
+    }
 }
 
 /* Tabelas/dataframes: só o arredondado — a borda quem dá é o card (`.st-key-bmt-card-*`)
@@ -214,6 +245,48 @@ def apply_custom_theme() -> None:
         icon_image=str(_ASSETS_DIR / "blau_icon.png"),
         size="large",
     )
+
+
+def render_filtro_periodo_tipo_cliente(key_prefix: str = "flt") -> None:
+    """Filtro de Período + Tipo de cliente (Governo/Privado), pra usar DENTRO de 1 página.
+
+    Até 2026-09-04 isso vivia sozinho na sidebar de `app.py` ("filtro global"), afetando
+    9 páginas sem ficar visível em nenhuma delas — confuso (setava o filtro num lugar, via
+    o efeito em outro). Movido pra dentro de cada página que usa, chamando esta função (as
+    que usam só Tipo de cliente, sem Período, chamam `render_filtro_tipo_cliente` em vez
+    desta) no topo do corpo da página — mesmas chaves de `st.session_state`
+    (`flt_data_inicio`/`flt_data_fim`/`flt_tipo_cliente`), então o valor ainda é
+    compartilhado entre as páginas que chamarem uma das duas (é o mesmo widget/estado, só
+    renderizado em lugares diferentes) — não é 1 filtro isolado por página.
+
+    Usam esta versão (período + tipo): Oportunidade, Faturamento, Vendedor, Crédito e
+    Devoluções, Vendedor x Meta x Faturamento. Usam só `render_filtro_tipo_cliente`:
+    Pedidos, Painel Vendas, Produto/Cliente, Relatório Analítico.
+
+    Não precisa de `with st.sidebar:` nem nada — a página que chama decide onde
+    (normalmente logo abaixo do título/caption, antes de qualquer consulta).
+    """
+    hoje = _dt.date.today()
+    periodo = st.date_input(
+        "Período",
+        value=(hoje - _dt.timedelta(days=30), hoje),
+        max_value=hoje,
+        key=f"{key_prefix}_periodo",
+    )
+    # date_input com range retorna tupla de 1 elemento enquanto o usuário só escolheu a
+    # data inicial (segunda ponta ainda não selecionada) — só atualiza o filtro quando o
+    # range vier completo; até lá, mantém o valor anterior (ou o default).
+    if isinstance(periodo, tuple) and len(periodo) == 2:
+        st.session_state[f"{key_prefix}_data_inicio"], st.session_state[f"{key_prefix}_data_fim"] = periodo
+    st.selectbox("Tipo de cliente", ["Todos", "Governo", "Privado"], key=f"{key_prefix}_tipo_cliente")
+
+
+def render_filtro_tipo_cliente(key_prefix: str = "flt") -> None:
+    """Só o filtro de Tipo de cliente (Governo/Privado) — ver `render_filtro_periodo_tipo_cliente`
+    pra contexto completo e pra quando usar cada uma. Mesma chave de `st.session_state`
+    (`flt_tipo_cliente`), então o valor é compartilhado com quem usa a outra função também.
+    """
+    st.selectbox("Tipo de cliente", ["Todos", "Governo", "Privado"], key=f"{key_prefix}_tipo_cliente")
 
 
 _KEY_SANITIZE = re.compile(r"[^a-zA-Z0-9_-]+")

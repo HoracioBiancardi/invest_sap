@@ -1,5 +1,5 @@
 """Gráficos compartilhados pelas páginas de Meta x Realizado —
-`pages/11_Metas.py` e `pages/12_Faturamento_vs_Meta.py`.
+`pages/11_Metas.py` e `pages/12_Painel_Vendas.py`.
 
 **Exceção deliberada** à convenção do resto de `scripts/` (só consulta, sem `streamlit`/
 `altair`) — mesmo raciocínio de `scripts/ui_filtros_comercial.py`: 2 páginas precisavam do

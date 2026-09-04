@@ -225,7 +225,7 @@ with st.container(border=True):
         f"{cob_meta_ytd_com:.1%}" if cob_meta_ytd_com is not None else "—",
         help=(
             "Mesma ressalva do Cob. Meta MTD. Canal 'MS' também não tem meta própria — ver "
-            "**Faturamento vs Meta** pro detalhe."
+            "**Painel Vendas** pro detalhe."
         ),
     )
 
@@ -308,7 +308,7 @@ if cob_meta_ytd_com is not None:
     if cob_meta_ytd_com < 0.8:
         st.warning(
             f"**Cob. Meta YTD comercial em {cob_meta_ytd_com:.0%}** (R$ {faturado_ytd_com:,.0f} "
-            f"de R$ {meta_ytd_com:,.0f}) — ver **Faturamento vs Meta** pra detalhar por "
+            f"de R$ {meta_ytd_com:,.0f}) — ver **Painel Vendas** pra detalhar por "
             "Divisional/Regional/Distrital/Setor onde está o maior desvio."
         )
     else:
@@ -348,15 +348,14 @@ st.markdown(
     **Faturamento (Painel Vendas)** (inspirada no Painel Vendas de referência, mas sobre
     `vendas_sap` + crosswalk cliente→setor — ver `docs/CONTEXTO_VENDAS_SAP.md` §10):
 
-    - **Faturamento vs Meta** — gauges MTD/YTD, evolução diária/mensal/trimestral, Meta x
-      Realizado por Canal/Divisional/Regional/Distrital/Setor/Família.
-    - **Faturamento Diário** — drill do dia/MTD, quebra por dimensão comercial e Estado (UF).
-    - **Faturamento Anual (YoY)** — comparativo ano corrente x ano anterior, + top clientes.
+    - **Painel Vendas** — 3 abas: MTD/YTD/Trimestral (gauges + Meta x Realizado por
+      Canal/Divisional/Regional/Distrital/Setor/Família), Diário (drill do dia/MTD + Estado
+      UF) e Anual/YoY (comparativo ano corrente x ano anterior + top clientes).
     - **Produto / Cliente** — preço médio, SKUs vendidos, ranking mensal por cliente/família/
       produto.
     - **Relatório Analítico** — detalhe linha a linha com seletor de colunas.
 
-    Todas as 5 acima têm um filtro de recorte próprio (Canal, Divisional, Cliente, Produto
+    Todas as 3 acima têm um filtro de recorte próprio (Canal, Divisional, Cliente, Produto
     etc.) além do "Quebrar por" de cada gráfico/tabela.
 
     **Técnico** (ferramentas de investigação pontual, com botão/input):

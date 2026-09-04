@@ -18,16 +18,17 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.query_vendas_sap import credito_disponivel_clientes, devolucoes_credito_motivo  # noqa: E402
-from scripts.ui_theme import card  # noqa: E402
+from scripts.ui_theme import card, render_filtro_periodo_tipo_cliente  # noqa: E402
 
 st.set_page_config(page_title="Crédito e Devoluções — Vendas SAP", page_icon="💳", layout="wide")
 st.title(":material/credit_card: Crédito e Devoluções")
 
+render_filtro_periodo_tipo_cliente()
 tipo_cliente_opcao = st.session_state.get("flt_tipo_cliente", "Todos")
 tipo_cliente = None if tipo_cliente_opcao == "Todos" else tipo_cliente_opcao
 data_inicio_global = st.session_state.get("flt_data_inicio", datetime.date.today() - datetime.timedelta(days=30))
 data_fim_global = st.session_state.get("flt_data_fim", datetime.date.today())
-st.caption(f"Usando filtro global: tipo de cliente **{tipo_cliente_opcao}** (ajuste no sidebar).")
+st.caption(f"Filtro: tipo de cliente **{tipo_cliente_opcao}**.")
 
 tab_limite, tab_devolucao = st.tabs(["Limite de crédito", "Devoluções / abatimentos (com motivo)"])
 

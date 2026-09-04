@@ -20,6 +20,7 @@ from scripts.query_vendas_sap import (  # noqa: E402
     estoque_validade,
     estoque_validade_resumo,
 )
+from scripts.trace_lote import trace_lote  # noqa: E402
 from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Estoque — Vendas SAP", page_icon="📦", layout="wide")
@@ -66,7 +67,9 @@ produto_acabado = {"Todos": None, "Acabado": True, "Não Acabado": False}[produt
 pais_centro = PAISES.get(pais_opcao)
 codigo_material = codigo_material.strip().upper() or None
 
-tab_restrito, tab_validade = st.tabs(["Restrito x Disponível", "Validade dos lotes"])
+tab_restrito, tab_validade, tab_rastreio = st.tabs(
+    ["Restrito x Disponível", "Validade dos lotes", "Rastreio de Lote"]
+)
 
 
 @st.cache_data(ttl=300, show_spinner="Consultando estoque...")
@@ -291,3 +294,51 @@ with tab_validade:
         ]
         with card("estoque-validade-detalhe"):
             st.dataframe(df_detalhe[colunas_validade].head(linhas), width="stretch", hide_index=True)
+
+with tab_rastreio:
+    st.caption(
+        "Fonte: `SILVER.dataspherev2.mseg`/`mkpf` (documento de material do SAP) — histórico "
+        "de movimentos por lote, algo que `fct_estoque_lote_sap` não guarda (aquela é só a "
+        "foto de agora). Ex.: produção → transferência entre centros → liberação de "
+        "qualidade → venda."
+    )
+
+    col_r1, col_r2, col_r3 = st.columns([2, 2, 1])
+    with col_r1:
+        material_busca = st.text_input(
+            "Código do material", placeholder="ex.: PA5522", key="rastreio_lote_material"
+        )
+    with col_r2:
+        lote_busca = st.text_input("Número do lote", placeholder="ex.: 24101103", key="rastreio_lote_numero")
+    with col_r3:
+        st.write("")
+        st.write("")
+        rastrear = st.button(
+            "Rastrear",
+            type="primary",
+            disabled=not (material_busca and lote_busca),
+            key="rastreio_lote_botao",
+        )
+
+    if rastrear and material_busca and lote_busca:
+        with st.spinner(f"Rastreando lote {lote_busca}..."):
+            df_movimentos = trace_lote(material_busca.strip().upper(), lote_busca.strip())
+
+        if df_movimentos.empty:
+            st.info("Nenhum movimento encontrado pra esse material+lote em MSEG/MKPF.")
+        else:
+            st.caption(
+                f"{len(df_movimentos)} movimento(s) — do mais antigo ao mais recente. "
+                "`Direcao` vem de `Debito_Credito` (S=Entrada, H=Saída); `Descricao_Estoque` "
+                "é o tipo de estoque (Livre/Qualidade/Bloqueado) daquela linha específica."
+            )
+            colunas_rastreio = [
+                "Data_Lancamento", "Descricao_Movimento", "Direcao", "Quantidade", "Unidade",
+                "Codigo_Centro", "Codigo_Deposito", "Descricao_Estoque",
+                "Centro_Destino", "Deposito_Destino", "Lote_Destino",
+                "Pedido_Venda", "Usuario", "Numero_Documento",
+            ]
+            with card("estoque-rastreio-lote"):
+                st.dataframe(df_movimentos[colunas_rastreio], width="stretch", hide_index=True)
+    elif not (material_busca and lote_busca):
+        st.caption("Digite código do material e número do lote, e clique em \"Rastrear\".")
