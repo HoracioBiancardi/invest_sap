@@ -36,9 +36,10 @@ from scripts.query_faturamento_comercial import (  # noqa: E402
     meta_vs_realizado_por_dimensao,
     top_clientes_periodo,
 )
+from scripts.query_vendas_sap import converter_para_brl, taxas_cambio_brl  # noqa: E402
 from scripts.ui_charts_comercial import grafico_meta_realizado  # noqa: E402
 from scripts.ui_filtros_comercial import render_filtros_comercial  # noqa: E402
-from scripts.ui_theme import card, render_filtro_tipo_cliente  # noqa: E402
+from scripts.ui_theme import card, render_filtro_tipo_cliente, render_valor_por_moeda  # noqa: E402
 
 st.set_page_config(page_title="Painel Vendas — Vendas Comercial", page_icon="🎯", layout="wide")
 st.title(":material/speed: Painel Vendas")
@@ -104,8 +105,19 @@ with tab_meta:
     df_mes_ytd = _serie_mes_cached(inicio_ano, hoje, tipo_cliente, filtros)
     df_meta_ytd_canal = _meta_dimensao_cached(inicio_ano, hoje, "Canal", tipo_cliente, filtros)
 
-    faturado_mtd = df_dia_mtd["Valor_Faturado"].sum() if not df_dia_mtd.empty else 0.0
-    faturado_ytd = df_mes_ytd["Valor_Faturado"].sum() if not df_mes_ytd.empty else 0.0
+    # Achado 2026-09-04: Valor_Faturado de faturamento_serie vem por Moeda — convertido pra
+    # BRL (taxa real do SAP, TCURR) antes de comparar com a meta, em vez de descartar moeda
+    # estrangeira como antes.
+    _taxas_painel = taxas_cambio_brl()
+    df_dia_mtd_brl = df_dia_mtd.assign(
+        Valor_BRL=converter_para_brl(df_dia_mtd, "Valor_Faturado", data_col="Dia", taxas=_taxas_painel)
+    ) if not df_dia_mtd.empty else df_dia_mtd
+    df_mes_ytd_brl = df_mes_ytd.assign(
+        Valor_BRL=converter_para_brl(df_mes_ytd, "Valor_Faturado", data_col="Mes", taxas=_taxas_painel)
+    ) if not df_mes_ytd.empty else df_mes_ytd
+
+    faturado_mtd = df_dia_mtd_brl["Valor_BRL"].sum() if not df_dia_mtd_brl.empty else 0.0
+    faturado_ytd = df_mes_ytd_brl["Valor_BRL"].sum() if not df_mes_ytd_brl.empty else 0.0
     meta_mtd = df_meta_ytd_canal.loc[
         df_meta_ytd_canal["Mes"] == hoje.strftime("%Y-%m"), "Meta_Valor"
     ].sum()
@@ -124,6 +136,9 @@ with tab_meta:
         f"{(faturado_ytd / meta_ytd):.1%}" if meta_ytd else "—",
         help=f"Faturado YTD: R$ {faturado_ytd:,.0f} / Meta YTD: R$ {meta_ytd:,.0f}",
     )
+    if not df_dia_mtd.empty and (df_dia_mtd["Moeda"] != "BRL").any():
+        with st.expander("Faturado MTD, por moeda original (sem conversão)"):
+            render_valor_por_moeda(df_dia_mtd, "Valor_Faturado")
 
     st.divider()
 
@@ -131,24 +146,30 @@ with tab_meta:
         col_a, col_b = st.columns([3, 2])
         with col_a:
             st.subheader("Faturamento diário — mês corrente")
-            if df_dia_mtd.empty:
+            if df_dia_mtd_brl.empty:
                 st.info("Sem faturamento no mês corrente ainda.")
             else:
-                st.bar_chart(df_dia_mtd.set_index("Dia")["Valor_Faturado"])
+                # Dia como string (não datetime) — Streamlit/Altair trata coluna de data
+                # como eixo contínuo em escala de hora quando há poucos pontos, encolhendo
+                # as barras a agulhas; como string vira eixo categórico, 1 posição por dia.
+                st.line_chart(
+                    df_dia_mtd_brl.assign(Dia=df_dia_mtd_brl["Dia"].astype(str))
+                    .groupby("Dia")["Valor_BRL"].sum()
+                )
         with col_b:
             st.subheader("Evolução mensal — ano corrente")
-            if df_mes_ytd.empty:
+            if df_mes_ytd_brl.empty:
                 st.info("Sem faturamento no ano corrente ainda.")
             else:
-                st.bar_chart(df_mes_ytd.set_index("Mes")["Valor_Faturado"])
+                st.bar_chart(df_mes_ytd_brl.groupby("Mes")["Valor_BRL"].sum())
 
     st.divider()
 
     st.subheader("Meta x Realizado — trimestral")
-    if df_mes_ytd.empty:
+    if df_mes_ytd_brl.empty:
         st.info("Sem dado suficiente pro trimestral.")
     else:
-        df_tri = df_mes_ytd.copy()
+        df_tri = df_mes_ytd_brl.copy()
         df_tri["Trimestre"] = "Tri " + (pd.to_datetime(df_tri["Mes"]).dt.month.sub(1) // 3 + 1).astype(
             str
         )
@@ -159,7 +180,7 @@ with tab_meta:
         comparacao_tri = (
             pd.DataFrame(
                 {
-                    "Valor_Realizado": df_tri.groupby("Trimestre")["Valor_Faturado"].sum(),
+                    "Valor_Realizado": df_tri.groupby("Trimestre")["Valor_BRL"].sum(),
                     "Meta_Valor": meta_tri.groupby("Trimestre")["Meta_Valor"].sum(),
                 }
             )
@@ -171,34 +192,43 @@ with tab_meta:
 
     st.divider()
 
-    st.subheader("Meta x Realizado por dimensão comercial")
-    st.caption(
-        "Divisional/Regional/Distrital/Setor vêm de `vendas.dim_estrutura` — organograma "
-        "SharePoint por nome de gerente, desigual entre linhas de negócio (ONCO/HEMATO é o "
-        "mais completo). Canal='MS' isola o cliente Ministério da Saúde (ver §10.1 do "
-        "contexto); a coluna Meta dele aparece vazia de propósito — a meta orçamentária não "
-        "separa esse cliente do resto do 'Publico'."
-    )
-
-    col_dim, col_periodo = st.columns([1, 2])
-    with col_dim:
-        dimensao_meta = st.selectbox(
-            "Quebrar por",
-            options=sorted(DIMENSOES_META),
-            index=sorted(DIMENSOES_META).index("Divisional"),
-            key="dim_meta",
-        )
-    with col_periodo:
-        periodo_opcao = st.radio(
-            "Período", options=["Ano corrente (YTD)", "Mês corrente"], horizontal=True
+    @st.fragment
+    def _meta_por_dimensao_fragment() -> None:
+        """Isolado num fragment — só "Quebrar por"/"Período" recomputam (sem escurecer/
+        rerodar a página inteira); filtros de nível de página (Tipo de cliente, filtro de
+        dimensão comercial) continuam disparando rerun completo normalmente."""
+        st.subheader("Meta x Realizado por dimensão comercial")
+        st.caption(
+            "Divisional/Regional/Distrital/Setor vêm de `vendas.dim_estrutura` — organograma "
+            "SharePoint por nome de gerente, desigual entre linhas de negócio (ONCO/HEMATO é o "
+            "mais completo). Canal='MS' isola o cliente Ministério da Saúde (ver §10.1 do "
+            "contexto); a coluna Meta dele aparece vazia de propósito — a meta orçamentária não "
+            "separa esse cliente do resto do 'Publico'."
         )
 
-    data_inicio_dim = inicio_ano if periodo_opcao == "Ano corrente (YTD)" else inicio_mes
-    df_dim = _meta_dimensao_cached(data_inicio_dim, hoje, dimensao_meta, tipo_cliente, filtros)
+        col_dim, col_periodo = st.columns([1, 2])
+        with col_dim:
+            dimensao_meta = st.selectbox(
+                "Quebrar por",
+                options=sorted(DIMENSOES_META),
+                index=sorted(DIMENSOES_META).index("Divisional"),
+                key="dim_meta",
+            )
+        with col_periodo:
+            periodo_opcao = st.radio(
+                "Período",
+                options=["Ano corrente (YTD)", "Mês corrente"],
+                horizontal=True,
+                key="periodo_meta_dimensao",
+            )
 
-    if df_dim.empty:
-        st.info("Nada encontrado para essa combinação de filtro.")
-    else:
+        data_inicio_dim = inicio_ano if periodo_opcao == "Ano corrente (YTD)" else inicio_mes
+        df_dim = _meta_dimensao_cached(data_inicio_dim, hoje, dimensao_meta, tipo_cliente, filtros)
+
+        if df_dim.empty:
+            st.info("Nada encontrado para essa combinação de filtro.")
+            return
+
         resumo = df_dim.groupby("Dimensao")[["Meta_Valor", "Valor_Realizado"]].sum()
         resumo["Cob_Meta"] = (resumo["Valor_Realizado"] / resumo["Meta_Valor"]).where(
             resumo["Meta_Valor"] > 0
@@ -206,25 +236,24 @@ with tab_meta:
         resumo = resumo.sort_values("Valor_Realizado", ascending=False)
 
         with card("fatmeta-dimensao"):
-            col_e, col_f = st.columns([2, 1])
-            with col_e:
-                top_grafico = resumo.head(15).reset_index()
-                if len(resumo) > 15:
-                    st.caption(
-                        f"Gráfico mostra as 15 maiores de {len(resumo)} — tabela ao lado tem todas."
-                    )
-                st.altair_chart(grafico_meta_realizado(top_grafico, "Dimensao"), width="stretch")
-            with col_f:
-                st.dataframe(
-                    resumo.style.format(
-                        {
-                            "Meta_Valor": "R$ {:,.0f}",
-                            "Valor_Realizado": "R$ {:,.0f}",
-                            "Cob_Meta": "{:.1%}",
-                        }
-                    ),
-                    width="stretch",
+            top_grafico = resumo.head(15).reset_index()
+            if len(resumo) > 15:
+                st.caption(
+                    f"Gráfico mostra as 15 maiores de {len(resumo)} — tabela abaixo tem todas."
                 )
+            st.altair_chart(grafico_meta_realizado(top_grafico, "Dimensao"), width="stretch")
+            st.dataframe(
+                resumo.reset_index(),
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Meta_Valor": st.column_config.NumberColumn("Meta_Valor", format="R$ %,.0f"),
+                    "Valor_Realizado": st.column_config.NumberColumn(
+                        "Valor_Realizado", format="R$ %,.0f"
+                    ),
+                    "Cob_Meta": st.column_config.NumberColumn("Cob_Meta", format="percent"),
+                },
+            )
 
         with st.expander("Detalhe mês a mês"):
             with card("fatmeta-dimensao-detalhe"):
@@ -247,6 +276,8 @@ with tab_meta:
                     width="stretch",
                     hide_index=True,
                 )
+
+    _meta_por_dimensao_fragment()
 
 with tab_diario:
     st.caption(
@@ -299,22 +330,34 @@ with tab_diario:
         )
 
     df_dia = _dia_cached(inicio_mes, hoje, tipo_cliente, filtros_diario)
+    # Achado 2026-09-04: Valor_Faturado vem por Moeda — convertido pra BRL (TCURR) abaixo.
+    _taxas_diario = taxas_cambio_brl()
+    df_dia_brl = df_dia.assign(
+        Valor_BRL=converter_para_brl(df_dia, "Valor_Faturado", data_col="Dia", taxas=_taxas_diario)
+    ) if not df_dia.empty else df_dia
     faturado_hoje = (
-        df_dia.loc[df_dia["Dia"] == hoje, "Valor_Faturado"].sum() if not df_dia.empty else 0.0
+        df_dia_brl.loc[df_dia_brl["Dia"] == hoje, "Valor_BRL"].sum() if not df_dia_brl.empty else 0.0
     )
-    faturado_mes = df_dia["Valor_Faturado"].sum() if not df_dia.empty else 0.0
+    faturado_mes = df_dia_brl["Valor_BRL"].sum() if not df_dia_brl.empty else 0.0
 
     c1, c2 = st.columns(2)
     c1.metric("Faturamento do Dia", f"R$ {faturado_hoje:,.0f}")
     c2.metric("Faturamento do Mês (MTD)", f"R$ {faturado_mes:,.0f}")
+    if not df_dia.empty and (df_dia["Moeda"] != "BRL").any():
+        with st.expander("MTD por moeda original (sem conversão)"):
+            render_valor_por_moeda(df_dia, "Valor_Faturado")
 
     st.divider()
 
     st.subheader("Evolução diária")
-    if df_dia.empty:
+    if df_dia_brl.empty:
         st.info("Sem faturamento no mês corrente ainda.")
     else:
-        st.bar_chart(df_dia.set_index("Dia")["Valor_Faturado"])
+        # Dia como string — mesmo motivo do gráfico em "Faturamento diário" acima (evita
+        # eixo temporal contínuo que encolhe as barras quando há poucos dias com dado).
+        st.line_chart(
+            df_dia_brl.assign(Dia=df_dia_brl["Dia"].astype(str)).groupby("Dia")["Valor_BRL"].sum()
+        )
 
     st.divider()
 
@@ -328,6 +371,7 @@ with tab_diario:
         janela_opcao = st.radio("Janela", options=["Hoje", "Mês (MTD)"], horizontal=True)
 
     if janela_opcao == "Hoje":
+        data_ref_quebra = hoje
         df_quebra = _dimensao_dia_cached(dimensao_diario, hoje, tipo_cliente, filtros_diario)
         if df_quebra.empty:
             st.info(
@@ -335,18 +379,22 @@ with tab_diario:
                 "de manhã, antes do primeiro lote de faturas do dia ser processado."
             )
     else:
+        data_ref_quebra = inicio_mes + (hoje - inicio_mes) / 2
         df_quebra = _dimensao_mes_cached(dimensao_diario, inicio_mes, hoje, tipo_cliente, filtros_diario)
         if df_quebra.empty:
             st.info("Nada encontrado para esse recorte no mês.")
 
     if not df_quebra.empty:
+        df_quebra = df_quebra.assign(_Data_Ref=data_ref_quebra)
+        df_quebra["Valor_BRL"] = converter_para_brl(df_quebra, "Valor_Faturado", data_col="_Data_Ref")
         col_g, col_h = st.columns([2, 1])
         with col_g:
-            st.bar_chart(df_quebra.set_index("Dimensao")["Valor_Faturado"].head(20))
+            st.bar_chart(df_quebra.groupby("Dimensao")["Valor_BRL"].sum().head(20))
         with col_h:
+            st.caption("Coluna `Moeda` = original antes da conversão.")
             st.dataframe(
-                df_quebra[["Dimensao", "Valor_Faturado", "Qtd_Faturada"]].style.format(
-                    {"Valor_Faturado": "R$ {:,.2f}", "Qtd_Faturada": "{:,.0f}"}
+                df_quebra[["Dimensao", "Moeda", "Valor_Faturado", "Valor_BRL", "Qtd_Faturada"]].style.format(
+                    {"Valor_Faturado": "{:,.2f}", "Valor_BRL": "R$ {:,.2f}", "Qtd_Faturada": "{:,.0f}"}
                 ),
                 width="stretch",
                 hide_index=True,
@@ -359,14 +407,17 @@ with tab_diario:
     if df_uf.empty:
         st.info("Sem faturamento no mês corrente ainda.")
     else:
+        df_uf = df_uf.assign(_Data_Ref=inicio_mes + (hoje - inicio_mes) / 2)
+        df_uf["Valor_BRL"] = converter_para_brl(df_uf, "Valor_Faturado", data_col="_Data_Ref")
         col_i, col_j = st.columns([1, 1])
         with col_i:
-            st.bar_chart(df_uf.set_index("Dimensao")["Valor_Faturado"])
+            st.bar_chart(df_uf.groupby("Dimensao")["Valor_BRL"].sum())
         with col_j:
+            st.caption("Coluna `Moeda` = original antes da conversão.")
             st.dataframe(
-                df_uf[["Dimensao", "Valor_Faturado", "Qtd_Faturada"]]
+                df_uf[["Dimensao", "Moeda", "Valor_Faturado", "Valor_BRL", "Qtd_Faturada"]]
                 .rename(columns={"Dimensao": "Estado"})
-                .style.format({"Valor_Faturado": "R$ {:,.2f}", "Qtd_Faturada": "{:,.0f}"}),
+                .style.format({"Valor_Faturado": "{:,.2f}", "Valor_BRL": "R$ {:,.2f}", "Qtd_Faturada": "{:,.0f}"}),
                 width="stretch",
                 hide_index=True,
             )
@@ -448,6 +499,7 @@ with tab_anual:
     if df_clientes.empty:
         st.info("Nada encontrado.")
     else:
+        st.caption("Valor faturado convertido pra BRL (taxa real do SAP, `TCURR`) antes de rankear.")
         with card("fatanual-top-clientes"):
             st.dataframe(
                 df_clientes.style.format(

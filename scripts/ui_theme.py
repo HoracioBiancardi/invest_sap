@@ -185,11 +185,29 @@ div[class*="st-key-bmt-card-"]::after {
     transform: rotate(45deg);
     z-index: 1;
     pointer-events: none;
+    transition: opacity 0.15s ease;
+}
+/* O menu/toolbar de gráfico ou tabela (nativo do Streamlit ou do vega-embed, ver os 2
+   blocos abaixo) só aparece no hover, bem no canto onde mora o acento diagonal acima —
+   mesmo com z-index acima dele, os ícones ficam visualmente sujos por cima da bandeirinha
+   colorida. Mais simples que reposicionar/encolher o acento: sumir com ele durante o hover
+   (mesmo momento em que o toolbar aparece), então nunca competem visualmente. */
+div[class*="st-key-bmt-card-"]:hover::after {
+    opacity: 0;
 }
 /* stElementToolbar (ícones de fullscreen/download/"show data" que aparecem no hover de
    gráfico/tabela) não tem z-index próprio — sem isso, fica por baixo do friso/acento
    diagonal acima (z-index 1-2) e alguns ícones somem ou ficam inclicáveis. */
 div[class*="st-key-bmt-card-"] [data-testid="stElementToolbar"] {
+    z-index: 3 !important;
+}
+/* Mesmo problema, só que no menu "..." nativo do Altair/Vega (`st.altair_chart`) — esse
+   não é o `stElementToolbar` acima, é o próprio botão do vega-embed (`summary`/
+   `.vega-actions`, `z-index: 1000` no CSS dele), que fica preso num stacking context por
+   baixo do acento diagonal (`::after`) quando o gráfico é o primeiro elemento do card (sem
+   `st.subheader`/`card_label()` empurrando ele pra baixo primeiro). */
+div[class*="st-key-bmt-card-"] .vega-embed summary,
+div[class*="st-key-bmt-card-"] .vega-embed .vega-actions {
     z-index: 3 !important;
 }
 
@@ -267,18 +285,21 @@ def render_filtro_periodo_tipo_cliente(key_prefix: str = "flt") -> None:
     (normalmente logo abaixo do título/caption, antes de qualquer consulta).
     """
     hoje = _dt.date.today()
-    periodo = st.date_input(
-        "Período",
-        value=(hoje - _dt.timedelta(days=30), hoje),
-        max_value=hoje,
-        key=f"{key_prefix}_periodo",
-    )
+    col_periodo, col_tipo = st.columns([2, 1])
+    with col_periodo:
+        periodo = st.date_input(
+            "Período",
+            value=(hoje - _dt.timedelta(days=30), hoje),
+            max_value=hoje,
+            key=f"{key_prefix}_periodo",
+        )
     # date_input com range retorna tupla de 1 elemento enquanto o usuário só escolheu a
     # data inicial (segunda ponta ainda não selecionada) — só atualiza o filtro quando o
     # range vier completo; até lá, mantém o valor anterior (ou o default).
     if isinstance(periodo, tuple) and len(periodo) == 2:
         st.session_state[f"{key_prefix}_data_inicio"], st.session_state[f"{key_prefix}_data_fim"] = periodo
-    st.selectbox("Tipo de cliente", ["Todos", "Governo", "Privado"], key=f"{key_prefix}_tipo_cliente")
+    with col_tipo:
+        st.selectbox("Tipo de cliente", ["Todos", "Governo", "Privado"], key=f"{key_prefix}_tipo_cliente")
 
 
 def render_filtro_tipo_cliente(key_prefix: str = "flt") -> None:
@@ -313,3 +334,83 @@ def card_label(text: str) -> None:
     gráfico/tabela dentro do card não já tem um `st.caption`/`st.subheader` explicando o
     que é (evita rótulo duplicado nesses casos — só chamar quando faltar contexto)."""
     st.markdown(f'<p class="bmt-card-label">{text}</p>', unsafe_allow_html=True)
+
+
+def render_valor_convertido_brl(
+    df,
+    valor_col: str,
+    moeda_col: str = "Moeda",
+    data_col: str = "Data",
+    label: str = "Total",
+    taxas=None,
+) -> None:
+    """1 `st.metric` com o total já convertido pra BRL (via `TCURR`, taxa de câmbio real do
+    SAP — ver `scripts/query_vendas_sap.py::converter_para_brl`), com um `st.expander`
+    fechado por padrão pra ver a quebra bruta por moeda sem conversão, se alguém quiser
+    conferir (decisão do usuário 2026-09-04: total convertido é o principal, a quebra por
+    moeda fica "atrás de um botão", não escondida de vez).
+
+    Args:
+        df: precisa ter `moeda_col`, `data_col` e `valor_col`.
+        label: nome do total (ex.: "Faturado no período" -> métrica "Faturado no período
+            (convertido p/ BRL)").
+        taxas: `taxas_cambio_brl()` já carregada, opcional (evita reconsultar o HANA toda
+            vez que esta função é chamada na mesma página).
+    """
+    from scripts.query_vendas_sap import MOEDAS_CAMBIO_DISPONIVEL, converter_para_brl
+
+    if df.empty:
+        st.metric(f"{label} (BRL)", "R$ 0")
+        return
+
+    valores_brl = converter_para_brl(df, valor_col, moeda_col, data_col, taxas=taxas)
+    total_convertido = valores_brl.sum()
+    st.metric(f"{label} (convertido p/ BRL)", f"R$ {total_convertido:,.0f}")
+
+    mask_sem_taxa = valores_brl.isna() & (df[moeda_col] != "BRL")
+    if mask_sem_taxa.any():
+        moedas_sem_taxa = sorted(df.loc[mask_sem_taxa, moeda_col].unique())
+        st.caption(
+            f":material/info: {int(mask_sem_taxa.sum()):,} linha(s) em moeda sem taxa de "
+            f"câmbio disponível ({', '.join(moedas_sem_taxa)}) não entraram no total acima "
+            f"(só {', '.join(MOEDAS_CAMBIO_DISPONIVEL)} têm taxa real nesta base)."
+        )
+
+    if (df[moeda_col] != "BRL").any():
+        with st.expander("Ver por moeda, sem conversão (valor original de cada uma)"):
+            render_valor_por_moeda(df, valor_col, moeda_col)
+
+
+def render_valor_por_moeda(df, valor_col: str, moeda_col: str = "Moeda", label_prefix: str = "") -> None:
+    """1 `st.metric` por moeda presente em `df`, em vez de somar tudo junto como se fosse R$.
+
+    Achado 2026-09-04: `Valor_*` de `fct_vendas_itens_sap`/`fct_faturamento_itens_sap`/
+    `fct_pendencia_sap` (e `Opportunity.amount`/`OpportunityLineItem.TotalPrice` do
+    Salesforce) vêm na moeda do documento original (BRL/USD/UYU/COP/EUR/...), sem conversão
+    — não existe taxa de câmbio pronta pra virar 1 número em R$ hoje (ver `TCURR`/HANA,
+    achado real mas ainda não ligado a nenhuma consulta deste projeto). Decisão do usuário
+    (2026-09-04): em vez de esconder/descartar moeda estrangeira, mostrar cada uma separada
+    — BRL primeiro (moeda principal do negócio), resto em ordem decrescente de valor.
+
+    Args:
+        df: DataFrame com 1 linha por (o que for) + moeda já no grão certo pra somar
+            (`valor_col` ainda não deve ter sido agregado ignorando `moeda_col`).
+        valor_col: coluna a somar por moeda.
+        moeda_col: coluna com o código da moeda (default `"Moeda"`).
+        label_prefix: texto opcional antes do código da moeda no rótulo do metric
+            (ex.: `"Faturado"` -> rótulo "Faturado BRL").
+    """
+    if df.empty or moeda_col not in df.columns:
+        st.caption("Sem dado de moeda disponível.")
+        return
+    resumo = df.groupby(moeda_col)[valor_col].sum().sort_values(ascending=False)
+    resumo = resumo[resumo != 0]
+    if resumo.empty:
+        st.caption("Sem valor a mostrar.")
+        return
+    ordem = ([m for m in ("BRL",) if m in resumo.index]) + [m for m in resumo.index if m != "BRL"]
+    cols = st.columns(len(ordem))
+    for col, moeda in zip(cols, ordem):
+        prefixo = "R$" if moeda == "BRL" else f"{moeda} "
+        rotulo = f"{label_prefix} {moeda}".strip()
+        col.metric(rotulo, f"{prefixo}{resumo[moeda]:,.0f}")

@@ -1,4 +1,4 @@
-# Proposta — Ingestão de histórico de estoque/movimento no `data-platform`
+,# Proposta — Ingestão de histórico de estoque/movimento no `data-platform`
 
 > Spec pra levar ao time de dados propor no repo `data-platform`
 > (`/home/swordpower/Documentos/REPO/TRABALHO/data-platform`). Documento separado de
@@ -9,6 +9,13 @@
 > Duas peças independentes, pode implementar uma sem a outra: **(A)** ingestão de
 > `MCHBH`/`MBEWH` (Bronze+Silver) e **(B)** o model Gold `fct_movimento_lote_sap` (usa
 > `mseg`/`mkpf`, que já estão ingeridos — não depende de A).
+>
+> **Status (2026-09-08)**: **Parte B implementada e validada com dado real** (2.523.686
+> linhas com lote preenchido, movimentos de hoje presentes e consistentes). **Parte A
+> implementada (Bronze+Silver) mas SEM validação de dado real** — `MCHBH`/`MBEWH` são
+> tabelas novas, sem nenhuma linha até a extração rodar em produção pelo menos 1 vez. Ver
+> `docs/REGRAS_E_MELHORIAS_DW.md` §5.11. Branch `feature/prioridade-pedido-carimbado-sap`
+> (`data-platform`, commit `ac897d2f`), ainda sem push/PR.
 
 ## Contexto (resumo — ver `CONTEXTO_VENDAS_SAP.md` §11 pro achado completo)
 

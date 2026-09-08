@@ -35,11 +35,17 @@ st.caption(
 
 hoje = datetime.date.today()
 data_inicio_padrao = hoje - datetime.timedelta(days=30)
-col_p1, col_p2 = st.columns(2)
-with col_p1:
-    data_inicio = st.date_input("De", value=data_inicio_padrao, max_value=hoje, key="remessas_data_inicio")
-with col_p2:
-    data_fim = st.date_input("Até", value=hoje, max_value=hoje, key="remessas_data_fim")
+periodo = st.date_input(
+    "Período", value=(data_inicio_padrao, hoje), max_value=hoje, key="remessas_periodo"
+)
+# date_input com range retorna tupla de 1 elemento enquanto o usuário só escolheu a data
+# inicial (segunda ponta ainda não selecionada) — só atualiza o filtro quando o range vier
+# completo; até lá, mantém o valor anterior (mesmo padrão de
+# `ui_theme.render_filtro_periodo_tipo_cliente`).
+if isinstance(periodo, tuple) and len(periodo) == 2:
+    st.session_state["remessas_data_inicio"], st.session_state["remessas_data_fim"] = periodo
+data_inicio = st.session_state.get("remessas_data_inicio", data_inicio_padrao)
+data_fim = st.session_state.get("remessas_data_fim", hoje)
 st.caption(
     "Período por `Data_Remessa` (data real de saída) — sem período, a consulta varre o "
     "histórico inteiro (lento e pouco útil pra uma lista de item a item)."

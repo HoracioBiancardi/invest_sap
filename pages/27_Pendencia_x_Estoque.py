@@ -19,6 +19,16 @@ Achado de auditoria (2026-09-03): bloqueio comercial explícito do SAP (VBAK.LIF
 tem só 82 pedidos preenchidos em TODO o histórico da base — não vira categoria aqui por
 falta de volume; ver docstring de `pendencia_x_estoque_global` no código-fonte.
 
+Achado 2026-09-06 (comparando com o Painel Vendas de referência, Power BI): 15 "clientes"
+com nome contendo "BLAU" (`BLAU FARMACEUTICA COLOMBIA`/`CHILE`/`FILIAL SP`, `BLAUFARMA
+URUGUAY`, `BLAU LOG`, etc.) são transferência intercompany entre filiais do próprio grupo,
+não venda a cliente final — concentram 64% da quantidade do backlog real e nunca têm
+`Linha_Negocio` (`dim_estrutura` mapeia segmento de cliente, não movimentação interna).
+Excluídos das métricas por padrão (`CLIENTE_INTERCOMPANY_LIKE`, ver
+`scripts/query_vendas_sap.py::linha_negocio_por_cliente`) — sem esse filtro o "NAO ALOCADO"
+por quantidade fica em ~98%, mascarando o gap real de cadastro (~35-45%, cobertura da
+planilha manual `dim_estrutura`).
+
 Reusa scripts/query_vendas_sap.py::pendencia_x_estoque_global +
 scripts/trace_lote.py::estoque_historico_material_centro. Pra investigar 1 material ou
 1 cliente específico com todo o contexto (Oportunidade, Remessa), usar Visão
@@ -37,9 +47,12 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.query_vendas_sap import (  # noqa: E402
+    CLIENTE_INTERCOMPANY_LIKE,
+    chave_org_vda_cli_pandas,
     correlacao_oportunidade_pedido_pendencia_fatura,
     credito_disponivel_clientes,
     estoque_restrito_disponivel,
+    linha_negocio_por_cliente,
     movimento_estoque_resumo_material_centro,
     organizacoes_vendas_texto,
     pendencia_x_estoque_global,
@@ -67,6 +80,11 @@ def _dados_cached() -> pd.DataFrame:
 @st.cache_data(ttl=1800, show_spinner="Consultando nomes de Organização de Vendas...")
 def _org_vendas_cached() -> pd.DataFrame:
     return organizacoes_vendas_texto()
+
+
+@st.cache_data(ttl=1800, show_spinner="Consultando Linha de Negócio por cliente...")
+def _linha_negocio_cached() -> pd.DataFrame:
+    return linha_negocio_por_cliente()
 
 
 @st.cache_data(ttl=300, show_spinner="Consultando estoque restrito x disponível (todos os materiais)...")
@@ -166,6 +184,31 @@ else:
     df["Nome_Org_Vendas"] = df["Nome_Org_Vendas"].fillna(df["Codigo_Org_Vendas"])
     df["Motivo_Principal"] = df.apply(_classificar_motivo_principal, axis=1)
 
+    df["Flag_Intercompany"] = df["Nome_Cliente"].str.contains(CLIENTE_INTERCOMPANY_LIKE, case=False, na=False)
+
+    # Linha de Negócio: 2 merges, não 1 — MANUAL casa por cliente+Org (`chave_org_vda_cli`,
+    # ver achado 2026-09-06 em `linha_negocio_por_cliente`: o mesmo cliente pode ter Linha
+    # de Negócio diferente conforme a Org), HEURISTICA_PRODUTO casa só por cliente (não
+    # depende de Org). Quem sobrar sem match nos 2 vira NAO ALOCADO.
+    _lookup = _linha_negocio_cached()
+    _manual = _lookup[_lookup["Origem_Linha_Negocio"] == "MANUAL"][["chave_org_vda_cli", "Linha_Negocio", "Origem_Linha_Negocio"]]
+    _heuristica = _lookup[_lookup["Origem_Linha_Negocio"] == "HEURISTICA_PRODUTO"].rename(
+        columns={"Codigo_Cliente": "_cliente_num"}
+    )[["_cliente_num", "Linha_Negocio", "Origem_Linha_Negocio"]]
+
+    df["_chave"] = chave_org_vda_cli_pandas(df["Codigo_Cliente"], df["Codigo_Org_Vendas"])
+    df = df.merge(_manual, left_on="_chave", right_on="chave_org_vda_cli", how="left").drop(columns=["_chave", "chave_org_vda_cli"])
+
+    df["_cliente_num"] = pd.to_numeric(df["Codigo_Cliente"], errors="coerce")
+    _sem_match = df["Linha_Negocio"].isna()
+    df = df.merge(_heuristica, on="_cliente_num", how="left", suffixes=("", "_h")).drop(columns="_cliente_num")
+    df.loc[_sem_match, "Linha_Negocio"] = df.loc[_sem_match, "Linha_Negocio"].fillna(df.loc[_sem_match, "Linha_Negocio_h"])
+    df.loc[_sem_match, "Origem_Linha_Negocio"] = df.loc[_sem_match, "Origem_Linha_Negocio"].fillna(df.loc[_sem_match, "Origem_Linha_Negocio_h"])
+    df = df.drop(columns=["Linha_Negocio_h", "Origem_Linha_Negocio_h"])
+
+    df["Linha_Negocio"] = df["Linha_Negocio"].fillna("NAO ALOCADO")
+    df["Origem_Linha_Negocio"] = df["Origem_Linha_Negocio"].fillna("NAO_ALOCADO")
+
     n_falso_positivo = int((df["Motivo_Principal"] == "Falso Positivo (já faturado)").sum())
     qtd_falso_positivo = df.loc[df["Motivo_Principal"] == "Falso Positivo (já faturado)", "Qtd_Pendente_Operacional"].sum()
     if n_falso_positivo:
@@ -183,9 +226,27 @@ else:
         key="pxe_incluir_falso_positivo",
         help="Deixe desmarcado pra ver só backlog real — pedidos já 100% faturados não deveriam contar como pendência.",
     )
-    df_base = df if incluir_falso_positivo else df[df["Motivo_Principal"] != "Falso Positivo (já faturado)"]
 
-    f1, f2, f3, f4, f5 = st.columns([1.3, 1.3, 0.8, 0.8, 0.8])
+    n_interco = int(df["Flag_Intercompany"].sum())
+    qtd_interco = df.loc[df["Flag_Intercompany"], "Qtd_Pendente_Operacional"].sum()
+    if n_interco:
+        st.caption(
+            f":material/info: {n_interco:,} item(ns) ({qtd_interco:,.0f} unidades) são transferência "
+            "intercompany entre filiais do próprio grupo Blau (`Nome_Cliente` contém "
+            f"\"{CLIENTE_INTERCOMPANY_LIKE}\"), não cliente comercial — concentram boa parte da "
+            "quantidade do backlog e nunca têm Linha de Negócio (não são cliente final). Fora das "
+            "métricas abaixo por padrão."
+        )
+    incluir_intercompany = st.checkbox(
+        "Incluir transferência intercompany nas métricas abaixo",
+        value=False,
+        key="pxe_incluir_intercompany",
+        help="Deixe desmarcado pra ver só backlog comercial real — transferência entre filiais não é venda a cliente final.",
+    )
+    df_base = df if incluir_falso_positivo else df[df["Motivo_Principal"] != "Falso Positivo (já faturado)"]
+    df_base = df_base if incluir_intercompany else df_base[~df_base["Flag_Intercompany"]]
+
+    f1, f2, f3, f4, f5, f6 = st.columns([1.1, 1.1, 1.1, 0.7, 0.7, 0.7])
     with f1:
         filtro_org = st.multiselect(
             "Organização de Vendas",
@@ -195,6 +256,14 @@ else:
             help="Vazio = todas.",
         )
     with f2:
+        filtro_linha_negocio = st.multiselect(
+            "Linha de Negócio",
+            options=sorted(df["Linha_Negocio"].dropna().unique()),
+            default=[],
+            key="pxe_linha_negocio",
+            help="Vazio = todas. Dado manual (planilha), cobertura parcial — ver 'NAO ALOCADO'.",
+        )
+    with f3:
         filtro_motivo = st.multiselect(
             "Motivo_Principal",
             options=sorted(df["Motivo_Principal"].dropna().unique()),
@@ -202,11 +271,11 @@ else:
             key="pxe_motivo",
             help="Vazio = todos.",
         )
-    with f3:
-        filtro_centro = st.text_input("Centro (opcional)", key="pxe_centro").strip()
     with f4:
-        filtro_material = st.text_input("Material (opcional)", key="pxe_material").strip().upper()
+        filtro_centro = st.text_input("Centro (opcional)", key="pxe_centro").strip()
     with f5:
+        filtro_material = st.text_input("Material (opcional)", key="pxe_material").strip().upper()
+    with f6:
         filtro_cliente = st.text_input("Cliente (nome, opcional)", key="pxe_cliente").strip().upper()
 
     def _limpar_filtro_material_centro() -> None:
@@ -223,6 +292,8 @@ else:
     df_filtrado = df_base
     if filtro_org:
         df_filtrado = df_filtrado[df_filtrado["Nome_Org_Vendas"].isin(filtro_org)]
+    if filtro_linha_negocio:
+        df_filtrado = df_filtrado[df_filtrado["Linha_Negocio"].isin(filtro_linha_negocio)]
     if filtro_motivo:
         df_filtrado = df_filtrado[df_filtrado["Motivo_Principal"].isin(filtro_motivo)]
     if filtro_centro:
@@ -232,19 +303,38 @@ else:
     if filtro_cliente:
         df_filtrado = df_filtrado[df_filtrado["Nome_Cliente"].str.upper().str.contains(filtro_cliente, na=False)]
 
-    valor_total = df_filtrado["Valor_Pendente_Faturamento"].sum()
+    # Achado 2026-09-04: Valor_Pendente_Faturamento vem na moeda do pedido (BRL/USD/UYU/COP/
+    # EUR), sem conversão — todo KPI/agregação em R$ desta página usa esta coluna auxiliar
+    # (0 fora de BRL) em vez da bruta, pra nunca misturar moeda numa soma. A coluna bruta
+    # continua exposta no detalhe por item (1 linha = 1 moeda, sem ambiguidade), junto com
+    # `Moeda` pra deixar claro qual é.
+    df_filtrado = df_filtrado.copy()
+    df_filtrado["Valor_Pendente_Faturamento_BRL"] = df_filtrado["Valor_Pendente_Faturamento"].where(
+        df_filtrado["Moeda"] == "BRL", 0.0
+    )
+    n_nao_brl = int((df_filtrado["Moeda"] != "BRL").sum())
+
+    valor_total = df_filtrado["Valor_Pendente_Faturamento_BRL"].sum()
     qtd_total = df_filtrado["Qtd_Pendente_Operacional"].sum()
     mask_sem_estoque = df_filtrado["Motivo_Principal"].isin(["Sem Estoque", "Estoque Parcial"])
-    valor_sem_estoque = df_filtrado.loc[mask_sem_estoque, "Valor_Pendente_Faturamento"].sum()
+    valor_sem_estoque = df_filtrado.loc[mask_sem_estoque, "Valor_Pendente_Faturamento_BRL"].sum()
     qtd_sem_estoque = df_filtrado.loc[mask_sem_estoque, "Qtd_Pendente_Operacional"].sum()
     mask_financeiro = df_filtrado["Motivo_Principal"] == "Financeiro (crédito)"
-    valor_financeiro = df_filtrado.loc[mask_financeiro, "Valor_Pendente_Faturamento"].sum()
+    valor_financeiro = df_filtrado.loc[mask_financeiro, "Valor_Pendente_Faturamento_BRL"].sum()
     qtd_financeiro = df_filtrado.loc[mask_financeiro, "Qtd_Pendente_Operacional"].sum()
+
+    if n_nao_brl:
+        st.caption(
+            f":material/info: {n_nao_brl:,} item(ns) no filtro atual têm pedido em moeda "
+            "diferente de BRL (USD/UYU/COP/EUR) — não entram em nenhum total em R$ desta "
+            "página (sem tabela de câmbio pra converter), mas aparecem no detalhe por item "
+            "com a coluna `Moeda`."
+        )
 
     with card("pxe-kpi"):
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Itens de pedido (filtro atual)", f"{len(df_filtrado):,}")
-        k2.metric("Valor pendente total", f"R$ {valor_total:,.0f}", f"{qtd_total:,.0f} un pendentes")
+        k2.metric("Valor pendente total (BRL)", f"R$ {valor_total:,.0f}", f"{qtd_total:,.0f} un pendentes")
         k3.metric(
             "Sem estoque + parcial",
             f"R$ {valor_sem_estoque:,.0f}",
@@ -261,7 +351,10 @@ else:
         col_a, col_b = st.columns([1, 1])
         df_motivo = (
             df_filtrado.groupby("Motivo_Principal")
-            .agg(Valor_Pendente_Faturamento=("Valor_Pendente_Faturamento", "sum"), Qtd_Pendente_Operacional=("Qtd_Pendente_Operacional", "sum"))
+            .agg(
+                Valor_Pendente_Faturamento=("Valor_Pendente_Faturamento_BRL", "sum"),
+                Qtd_Pendente_Operacional=("Qtd_Pendente_Operacional", "sum"),
+            )
             .sort_values("Valor_Pendente_Faturamento", ascending=False)
         )
         with col_a:
@@ -282,6 +375,40 @@ else:
             )
             st.bar_chart(df_motivo_pct, horizontal=True, stack=False)
 
+    st.markdown("**Valor e quantidade pendente por Linha de Negócio**")
+    st.caption(
+        "Dado manual (`dim_estrutura`, planilha), não SAP — cobertura parcial dos clientes. "
+        "'NAO ALOCADO' aqui é gap de cadastro real (transferência intercompany já foi excluída "
+        "acima por padrão), diferente de Organização de Vendas (SAP, sempre 100% preenchida)."
+    )
+    with card("pxe-linha-negocio-chart"):
+        col_c, col_d = st.columns([1, 1])
+        df_linha_negocio = (
+            df_filtrado.groupby("Linha_Negocio")
+            .agg(
+                Valor_Pendente_Faturamento=("Valor_Pendente_Faturamento_BRL", "sum"),
+                Qtd_Pendente_Operacional=("Qtd_Pendente_Operacional", "sum"),
+            )
+            .sort_values("Valor_Pendente_Faturamento", ascending=False)
+        )
+        with col_c:
+            st.dataframe(
+                df_linha_negocio.reset_index().style.format(
+                    {"Valor_Pendente_Faturamento": "R$ {:,.2f}", "Qtd_Pendente_Operacional": "{:,.0f}"}
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+        with col_d:
+            st.caption("% do total — Valor x Quantidade")
+            df_linha_negocio_pct = pd.DataFrame(
+                {
+                    "% do Valor": df_linha_negocio["Valor_Pendente_Faturamento"] / df_linha_negocio["Valor_Pendente_Faturamento"].sum() * 100,
+                    "% da Quantidade": df_linha_negocio["Qtd_Pendente_Operacional"] / df_linha_negocio["Qtd_Pendente_Operacional"].sum() * 100,
+                }
+            )
+            st.bar_chart(df_linha_negocio_pct, horizontal=True, stack=False)
+
     st.markdown("**Motivo_Principal x Organização de Vendas**")
     tab_valor_pivot, tab_qtd_pivot = st.tabs(["Valor pendente (R$)", "Quantidade pendente (un)"])
     with tab_valor_pivot:
@@ -289,7 +416,7 @@ else:
             pivot_valor = df_filtrado.pivot_table(
                 index="Motivo_Principal",
                 columns="Nome_Org_Vendas",
-                values="Valor_Pendente_Faturamento",
+                values="Valor_Pendente_Faturamento_BRL",
                 aggfunc="sum",
                 fill_value=0,
             )
@@ -335,7 +462,7 @@ else:
             .agg(
                 Itens_Total=("Numero_Pedido", "count"),
                 Qtd_Sem_Estoque=("Qtd_Pendente_Operacional", "sum"),
-                Valor_Sem_Estoque=("Valor_Pendente_Faturamento", "sum"),
+                Valor_Sem_Estoque=("Valor_Pendente_Faturamento_BRL", "sum"),
             )
             .reset_index()
         )
@@ -394,6 +521,13 @@ else:
         ]
         df_ranking_show = df_ranking[colunas_ranking].reset_index(drop=True)
 
+        with card("pxe-ranking-kpi"):
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("Materiais (Material+Centro)", f"{len(df_ranking_show):,}")
+            r2.metric("Itens de pedido", f"{int(df_ranking_show['Itens_Total'].sum()):,}")
+            r3.metric("Qtd sem estoque", f"{df_ranking_show['Qtd_Sem_Estoque'].sum():,.0f}")
+            r4.metric("Valor sem estoque (BRL)", f"R$ {df_ranking_show['Valor_Sem_Estoque'].sum():,.2f}")
+
         def _ao_selecionar_ranking() -> None:
             # Callback (roda ANTES do corpo do script na próxima execução) — só assim dá
             # pra escrever em st.session_state dos widgets de filtro (pxe_material/
@@ -434,7 +568,8 @@ else:
     colunas_detalhe = [
         "Numero_Pedido", "Item_Pedido", "Tipo_Ordem_Venda", "Data_Inclusao_Pedido", "Dias_Desde_Inclusao_Pedido",
         "Codigo_Produto", "Descricao_Produto", "Codigo_Centro", "Nome_Centro",
-        "Nome_Org_Vendas", "Codigo_Cliente", "Nome_Cliente", "Qtd_Pendente_Operacional", "Valor_Pendente_Faturamento",
+        "Nome_Org_Vendas", "Linha_Negocio", "Codigo_Cliente", "Nome_Cliente", "Qtd_Pendente_Operacional",
+        "Moeda", "Valor_Pendente_Faturamento",
         "Motivo_Principal", "Status_Pendencia", "Status_Pendencia_Estoque", "Flag_Totalmente_Faturado",
         "Valor_Credito_Disponivel", "Cliente_Bloqueado",
         "Qtd_Pedida", "Qtd_Remetida", "Qtd_Faturada",
@@ -452,17 +587,24 @@ else:
             Tipo_Ordem_Venda=("Tipo_Ordem_Venda", "first"),
             Nome_Cliente=("Nome_Cliente", "first"),
             Nome_Org_Vendas=("Nome_Org_Vendas", "first"),
+            Linha_Negocio=("Linha_Negocio", "first"),
             Itens_Total=("Item_Pedido", "count"),
             Qtd_Pendente_Total=("Qtd_Pendente_Operacional", "sum"),
-            Valor_Pendente_Total=("Valor_Pendente_Faturamento", "sum"),
+            Valor_Pendente_Total=("Valor_Pendente_Faturamento_BRL", "sum"),
             Motivo_Resumo=("Motivo_Principal", _resumo_motivo),
         )
         .reset_index()
         .sort_values("Data_Inclusao_Pedido", ascending=False)
     )
 
-    n_detalhe = st.slider("Quantos pedidos mostrar", min_value=20, max_value=2000, value=200, step=20, key="pxe_detalhe_n")
-    df_pedido_show = df_pedido_agregado.head(n_detalhe).reset_index(drop=True)
+    with card("pxe-detalhe-pedido-kpi"):
+        p1, p2, p3, p4 = st.columns(4)
+        p1.metric("Pedidos", f"{len(df_pedido_agregado):,}")
+        p2.metric("Itens", f"{int(df_pedido_agregado['Itens_Total'].sum()):,}")
+        p3.metric("Qtd pendente total", f"{df_pedido_agregado['Qtd_Pendente_Total'].sum():,.0f}")
+        p4.metric("Valor pendente total (BRL)", f"R$ {df_pedido_agregado['Valor_Pendente_Total'].sum():,.2f}")
+
+    df_pedido_show = df_pedido_agregado.reset_index(drop=True)
 
     with card("pxe-detalhe-pedido"):
         evento_pedido = st.dataframe(
@@ -490,9 +632,11 @@ else:
             .reset_index(drop=True)
         )
         with card("pxe-detalhe-item"):
+            # Valor_Pendente_Faturamento não leva prefixo "R$" fixo — vem na moeda do
+            # pedido (coluna Moeda ao lado), pode ser USD/UYU/COP/EUR (achado 2026-09-04).
             evento = st.dataframe(
                 df_detalhe_show.style.format(
-                    {"Valor_Pendente_Faturamento": "R$ {:,.2f}", "Valor_Credito_Disponivel": "R$ {:,.2f}"}, na_rep="—"
+                    {"Valor_Pendente_Faturamento": "{:,.2f}", "Valor_Credito_Disponivel": "R$ {:,.2f}"}, na_rep="—"
                 ),
                 width="stretch",
                 hide_index=True,
@@ -515,7 +659,8 @@ else:
         d1.metric("Cliente", linha["Nome_Cliente"])
         d2.metric("Motivo_Principal", linha["Motivo_Principal"])
         d3.metric("Data do pedido", str(linha["Data_Inclusao_Pedido"])[:10])
-        d4.metric("Valor pendente", f"R$ {linha['Valor_Pendente_Faturamento']:,.2f}")
+        moeda_linha = linha.get("Moeda") or "BRL"
+        d4.metric(f"Valor pendente ({moeda_linha})", f"{linha['Valor_Pendente_Faturamento']:,.2f}")
         st.caption(
             f"Centro {linha['Codigo_Centro']} ({linha['Nome_Centro']}) — Org. Vendas "
             f"{linha['Nome_Org_Vendas']}. `Status_Pendencia`: {linha['Status_Pendencia']}. "

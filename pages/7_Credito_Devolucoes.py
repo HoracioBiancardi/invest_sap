@@ -1,8 +1,9 @@
 """Página: limite de crédito + devoluções/abatimentos com motivo.
 
 Reusa scripts/query_vendas_sap.py::credito_disponivel_clientes (limite) e
-::devolucoes_credito_motivo (devoluções — fonte GOLD.vendas.dim_credito_devolucoes, a única
-com o campo Texto/motivo preenchido; ver docstring da função pra detalhe).
+::devolucoes_credito_motivo (devoluções — fonte GOLD.vendas_sap.fct_credito_devolucoes_sap
+desde a migração de 2026-09-05, ver docstring da função pra detalhe do texto de motivo e do
+sinal contábil de `Montante`).
 """
 
 from __future__ import annotations
@@ -85,10 +86,13 @@ with tab_limite:
 
 with tab_devolucao:
     st.caption(
-        "Fonte: `GOLD.vendas.dim_credito_devolucoes` — lançamentos de crédito/devolução/abatimento "
-        "de cliente, com o texto de motivo (livre) que o time financeiro registrou no lançamento. "
-        "Por padrão exclui `Tp_doc = 'RV'` (transferência de documento de faturamento de rotina, "
-        ">95% das linhas, não é devolução/abatimento de negócio de fato)."
+        "Fonte: `GOLD.vendas_sap.fct_credito_devolucoes_sap` — lançamentos de crédito/devolução/"
+        "abatimento de cliente, com o texto de motivo (livre) que o time financeiro registrou no "
+        "lançamento. Por padrão exclui `Tp_doc = 'RV'` (transferência de documento de faturamento "
+        "de rotina, ~92% das linhas, não é devolução/abatimento de negócio de fato). **Montante "
+        "vem com o sinal contábil real do SAP** (negativo = crédito/`H`, positivo = débito/`S`, "
+        "coluna `Indicador_Debito_Credito` na tabela de detalhe) — os totais abaixo são posição "
+        "líquida (débitos menos créditos), não soma bruta de transações."
     )
     col1, col2 = st.columns([1, 1])
     with col1:
@@ -103,12 +107,18 @@ with tab_devolucao:
     else:
         c1, c2 = st.columns(2)
         c1.metric("Qtd Lançamentos", f"{len(df_dev):,}")
-        c2.metric("Valor Total", f"R$ {df_dev['Montante'].sum():,.2f}")
+        c2.metric(
+            "Valor Líquido (Débito − Crédito)",
+            f"R$ {df_dev['Montante'].sum():,.2f}",
+            help="Soma de Montante já com sinal contábil — não é o total bruto de transações.",
+        )
 
         st.subheader("Por tipo de documento (código SAP)")
         st.caption(
-            "Sem tradução oficial disponível pra esses códigos nesta base (T003T não replicada "
-            "no HANA) — use o texto de motivo na tabela abaixo, que é bem mais informativo."
+            "Sem tradução oficial pra esses códigos na tela ainda (T003T já foi confirmada com "
+            "dado real no HANA, mas a ingestão formal pro DW não foi feita, ver "
+            "docs/PROPOSTA_INGESTAO_CREDITO_E_MESTRES_SAP.md Parte C) — use o texto de motivo na "
+            "tabela abaixo, que é bem mais informativo."
         )
         with card("credito-devolucao-tipo-doc"):
             st.bar_chart(df_dev.groupby("Tp_doc")["Montante"].sum())
@@ -128,7 +138,10 @@ with tab_devolucao:
         with card("credito-devolucao-detalhe"):
             st.dataframe(
                 df_dev[
-                    ["N_documento", "Codigo_Cliente", "Nome_Cliente", "Data_documento", "Tp_doc", "Montante", "Texto"]
+                    [
+                        "N_documento", "Codigo_Cliente", "Nome_Cliente", "Data_documento", "Tp_doc",
+                        "Indicador_Debito_Credito", "Montante", "Texto",
+                    ]
                 ],
                 width="stretch",
                 hide_index=True,

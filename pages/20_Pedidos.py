@@ -75,7 +75,8 @@ with tab_geral:
                 st.bar_chart(df_aging.set_index("Faixa_Aging")["Valor_Pendente_Total"])
         st.caption(
             "O balde \"60+ dias\" acima junta de 61 dias até pedido de mais de 1 década — "
-            "ver \"Radar de pedido zumbi\" abaixo pra abrir esse balde."
+            "ver \"Radar de pedido zumbi\" abaixo pra abrir esse balde. `Valor_Pendente_Total` "
+            "soma só pedidos em BRL, pra não misturar moeda."
         )
 
     st.divider()
@@ -103,8 +104,19 @@ with tab_geral:
         )
         df_backlog["Backlog_Antigo"] = df_backlog["Dias_Desde_Inclusao_Pedido"] > limiar_zumbi_dias
 
-        valor_total = df_backlog["Valor_Pendente_Faturamento"].sum()
-        valor_antigo = df_backlog.loc[df_backlog["Backlog_Antigo"], "Valor_Pendente_Faturamento"].sum()
+        # Achado 2026-09-04: Valor_Pendente_Faturamento vem na moeda do pedido (BRL/USD/UYU/
+        # COP/EUR), sem conversão — nunca somar sem filtrar Moeda=='BRL' (ver
+        # scripts/query_vendas_sap.py::_moeda_pedido_join_sql). Qtd_* não é afetado.
+        df_backlog_brl = df_backlog[df_backlog["Moeda"] == "BRL"]
+        df_outras_moedas = (
+            df_backlog[df_backlog["Moeda"] != "BRL"]
+            .groupby("Moeda")["Valor_Pendente_Faturamento"]
+            .sum()
+            .sort_values(ascending=False)
+        )
+
+        valor_total = df_backlog_brl["Valor_Pendente_Faturamento"].sum()
+        valor_antigo = df_backlog_brl.loc[df_backlog_brl["Backlog_Antigo"], "Valor_Pendente_Faturamento"].sum()
         qtd_antigo = df_backlog.loc[df_backlog["Backlog_Antigo"], "Qtd_Pendente_Remessa"].sum()
         materiais_com_antigo = df_backlog.loc[df_backlog["Backlog_Antigo"], "Codigo_Produto"].nunique()
 
@@ -118,14 +130,30 @@ with tab_geral:
             )
             k3.metric("Qtd possível zumbi (unid.)", f"{qtd_antigo:,.0f}")
             k4.metric("Materiais afetados", f"{materiais_com_antigo:,}")
+        st.caption(
+            "Valores em R$ acima somam só pedidos `Moeda='BRL'` — backlog em outra moeda "
+            "existe mas não é convertível nesta base (sem tabela de câmbio) e não entra na "
+            "soma, pra não misturar moeda. `Qtd`/`Materiais afetados` somam todas as moedas."
+        )
+        if not df_outras_moedas.empty:
+            with st.expander(f"Backlog aberto em outras moedas ({len(df_outras_moedas)}) — não somado acima"):
+                st.dataframe(
+                    df_outras_moedas.rename("Valor_Pendente_Faturamento (moeda própria)")
+                    .map(lambda v: f"{v:,.2f}")
+                    .rename_axis("Moeda")
+                    .reset_index(),
+                    width="stretch",
+                    hide_index=True,
+                )
 
         bins = [-1, 90, 365, 1095, float("inf")]
         labels = ["0-90 dias", "91-365 dias", "1-3 anos", "3+ anos"]
-        df_backlog["Faixa_Idade"] = pd.cut(
-            df_backlog["Dias_Desde_Inclusao_Pedido"], bins=bins, labels=labels
+        df_backlog_brl = df_backlog_brl.copy()
+        df_backlog_brl["Faixa_Idade"] = pd.cut(
+            df_backlog_brl["Dias_Desde_Inclusao_Pedido"], bins=bins, labels=labels
         )
         df_faixa = (
-            df_backlog.groupby("Faixa_Idade", observed=True)["Valor_Pendente_Faturamento"]
+            df_backlog_brl.groupby("Faixa_Idade", observed=True)["Valor_Pendente_Faturamento"]
             .sum()
             .reindex(labels)
         )
@@ -141,7 +169,9 @@ with tab_geral:
                         "Itens_Total": len(g),
                         "Qtd_Recente": g.loc[~g["Backlog_Antigo"], "Qtd_Pendente_Remessa"].sum(),
                         "Qtd_Antigo": g.loc[g["Backlog_Antigo"], "Qtd_Pendente_Remessa"].sum(),
-                        "Valor_Antigo": g.loc[g["Backlog_Antigo"], "Valor_Pendente_Faturamento"].sum(),
+                        "Valor_Antigo": g.loc[
+                            g["Backlog_Antigo"] & (g["Moeda"] == "BRL"), "Valor_Pendente_Faturamento"
+                        ].sum(),
                         "Dias_Max": g["Dias_Desde_Inclusao_Pedido"].max(),
                     }
                 ),
@@ -189,7 +219,8 @@ with tab_geral:
         "`Qtd_Estoque_Disponivel_Venda` de `fct_pendencia_sap` — esse campo pode subestimar "
         "o estoque real disponível pra um material específico (ver bug documentado na "
         "página **Material**); pra decidir se dá pra faturar um material específico, use "
-        "a página Material em vez de confiar só nesse resumo agregado."
+        "a página Material em vez de confiar só nesse resumo agregado. `Valor_Pendente_Total` "
+        "soma só pedidos em BRL, pra não misturar moeda."
     )
     with card("pedidos-estoque"):
         col1, col2 = st.columns([1, 1])
@@ -202,6 +233,7 @@ with tab_geral:
     st.divider()
 
     st.subheader("Top clientes por valor pendente")
+    st.caption("`Valor_Pendente_Total` soma só pedidos em BRL, pra não misturar moeda.")
     n = st.slider("Quantos clientes mostrar", min_value=5, max_value=50, value=20, step=5, key="pedidos_top_n")
     df_clientes_pendentes = _top_clientes_cached(n, tipo_cliente=tipo_cliente)
     with card("pedidos-top-clientes-pendentes"):
@@ -212,7 +244,8 @@ with tab_geral:
     st.subheader("Backlog por Tipo de Ordem de Venda")
     st.caption(
         "Tipo_Ordem_Venda é o código SAP (AUART) do pedido — sem tradução pra texto "
-        "disponível nesta base."
+        "disponível nesta base. `Valor_Pendente_Total` soma só pedidos em BRL, pra não "
+        "misturar moeda."
     )
     df_tipo_ordem = _tipo_ordem_cached(tipo_cliente=tipo_cliente)
     with card("pedidos-tipo-ordem"):
@@ -229,7 +262,9 @@ with tab_geral:
     st.caption(
         "Fonte: `fct_vendas_itens_sap.Data_Inclusao_Pedido` — pedido novo entrando, não é o "
         "mesmo conceito de backlog (que não tem data de \"quando entrou\" fixa, é o que "
-        "ainda está em aberto hoje)."
+        "ainda está em aberto hoje). `Valor total pedido`/`Valor médio de pedido` somam só "
+        "pedidos `Moeda='BRL'` — não misturam moeda; `Pedidos no período` conta todas as "
+        "moedas."
     )
     meses = st.slider("Janela (meses)", min_value=6, max_value=36, value=12, step=1, key="pedidos_meses")
     hoje = datetime.date.today()
@@ -239,7 +274,7 @@ with tab_geral:
         st.info("Sem pedidos no período.")
     else:
         df_mensal = df_mensal.assign(
-            Valor_Medio_Pedido=lambda d: d["Valor_Pedido"] / d["Qtd_Pedidos"].replace(0, pd.NA)
+            Valor_Medio_Pedido=lambda d: d["Valor_Pedido"] / d["Qtd_Pedidos_BRL"].replace(0, pd.NA)
         )
         c1, c2, c3 = st.columns(3)
         c1.metric("Pedidos no período", f"{df_mensal['Qtd_Pedidos'].sum():,.0f}")
@@ -257,6 +292,10 @@ with tab_geral:
     st.divider()
 
     st.subheader("Ranking de pedidos por cliente")
+    st.caption(
+        "Restrito a pedidos `Moeda='BRL'` — cliente com pedido só em moeda estrangeira no "
+        "período não aparece aqui, pra não misturar moeda no valor médio."
+    )
     n_clientes = st.slider("Quantos clientes mostrar", min_value=5, max_value=50, value=20, step=5, key="pedidos_ranking_n")
     df_ranking_clientes = _pedidos_cliente_cached(data_inicio_mensal, hoje, n_clientes, tipo_cliente)
     if df_ranking_clientes.empty:

@@ -31,7 +31,7 @@ st.caption(
 )
 PAISES = {"Brasil": "BR", "Uruguai": "UY", "Colômbia": "CO", "Alemanha": "DE"}
 
-col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
+col1, col2, col3, col4 = st.columns(4)
 with col1:
     pais_opcao = st.selectbox(
         "País",
@@ -60,8 +60,6 @@ with col4:
             "resto (matéria-prima, embalagem, granel, consumíveis, etc.)."
         ),
     )
-with col5:
-    linhas = st.slider("Linhas exibidas", min_value=20, max_value=500, value=100, step=20)
 
 produto_acabado = {"Todos": None, "Acabado": True, "Não Acabado": False}[produto_acabado_opcao]
 pais_centro = PAISES.get(pais_opcao)
@@ -221,7 +219,13 @@ with tab_restrito:
 
         st.divider()
 
-        st.subheader(f"Detalhe ({min(linhas, len(df))} de {len(df)} linhas)")
+        _, col_linhas = st.columns([3, 1])
+        with col_linhas:
+            linhas_restrito = st.slider(
+                "Linhas exibidas", min_value=20, max_value=500, value=100, step=20,
+                key="estoque_linhas_restrito",
+            )
+        st.subheader(f"Detalhe ({min(linhas_restrito, len(df))} de {len(df)} linhas)")
         colunas_exibir = [
             "Codigo_Material", "Descricao_Material", "Produto_Acabado", "Descricao_Tipo_Material",
             "Status_Material", "Descricao_Status_Global_Material",
@@ -230,7 +234,7 @@ with tab_restrito:
             "Qtd_Transferencia", "Qtd_Reservada", "Qtd_Fisico_Total", "Valor_Financeiro_Estoque",
         ]
         with card("estoque-detalhe"):
-            st.dataframe(df[colunas_exibir].head(linhas), width="stretch", hide_index=True)
+            st.dataframe(df[colunas_exibir].head(linhas_restrito), width="stretch", hide_index=True)
 
 with tab_validade:
     st.caption(
@@ -285,6 +289,12 @@ with tab_validade:
 
         st.subheader("Lotes mais urgentes (vencidos ou vencendo antes)")
         st.caption("Coluna `Moeda`: filtre por País acima pra garantir que o valor exibido é 1 moeda só.")
+        _, col_linhas_validade = st.columns([3, 1])
+        with col_linhas_validade:
+            linhas_validade = st.slider(
+                "Linhas exibidas", min_value=20, max_value=500, value=100, step=20,
+                key="estoque_linhas_validade",
+            )
         df_detalhe = _validade_detalhe_cached(codigo_centro or None, produto_acabado, pais_centro)
         colunas_validade = [
             "Codigo_Material", "Descricao_Material", "Status_Material", "Numero_Lote",
@@ -293,7 +303,7 @@ with tab_validade:
             "Qtd_Estoque_Fisico_Total", "Valor_Financeiro_Estoque",
         ]
         with card("estoque-validade-detalhe"):
-            st.dataframe(df_detalhe[colunas_validade].head(linhas), width="stretch", hide_index=True)
+            st.dataframe(df_detalhe[colunas_validade].head(linhas_validade), width="stretch", hide_index=True)
 
 with tab_rastreio:
     st.caption(

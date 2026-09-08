@@ -147,38 +147,74 @@ uv run streamlit run app.py
 Abre em `http://localhost:8501`. Ctrl+C no terminal encerra o servidor.
 
 `app.py` não tem conteúdo próprio — é só um router (`st.navigation`) que monta o menu
-lateral em 3 seções (2026-08-25); o filtro de Período/Tipo de cliente não mora mais aqui,
-foi movido pra dentro de cada página que usa (ver §9.1). O conteúdo de cada página vive em
-`pages/*.py`. Tema visual em `.streamlit/config.toml` (cor/fonte — ver §9.2).
+lateral em 6 grupos (reorganizado em 2026-09-05, ver docstring de `app.py`); o filtro de
+Período/Tipo de cliente não mora mais aqui, foi movido pra dentro de cada página que usa
+(ver §9.1). O conteúdo de cada página vive em `pages/*.py`. Tema visual em
+`.streamlit/config.toml` (cor/fonte — ver §9.2).
 
-A separação entre **📊 Dashboards** e **💰 Faturamento (Painel Vendas)** não é estética: são
-duas *consultas* diferentes sobre a mesma fonte (`vendas_sap.fct_faturamento_itens_sap`) —
-Dashboards soma o total bruto (sem recorte comercial); Faturamento (Painel Vendas) passa pelo
-crosswalk cliente→setor (`scripts/query_faturamento_comercial.py`, ~52% de cobertura) pra
-poder quebrar por Canal/Divisional/Regional/Distrital/Setor. Ver `CONTEXTO_VENDAS_SAP.md`
-§10 — inclusive o histórico de por que uma versão anterior usava `vendas.fat_faturamento`
-(schema legado) e foi descartada. Ao criar uma página nova, decida a seção pela consulta que
-ela usa, não pelo tema de negócio.
+**Histórico da reorganização**: as páginas atuais nasceram fundindo/reduzindo páginas mais
+antigas (algumas citadas ainda em `docs/CONTEXTO_VENDAS_SAP.md`/`docs/REGRAS_E_MELHORIAS_DW.md`
+com o nome/número antigo — ex. `1_Pendencias.py`, `3_Rastrear_Pedido.py`, `4_DDIC_Lookup.py`,
+`5_Jornada_Pedido.py`, `8_Faturamento_Org_Vendas.py`, `9_Conectividade.py`,
+`10_Analise_Historica.py`, `16_Relatorio_Pedidos.py` **não existem mais como página** — o
+conteúdo foi absorvido pelas páginas atuais, ver a coluna "Reusa"/docstring de cada uma
+abaixo). Se um documento mais antigo citar um desses nomes, o conteúdo equivalente hoje está
+em `20_Pedidos.py` (Pendências + Relatório de Pedidos + Rastrear Pedido),
+`19_Oportunidade.py` (Jornada do Pedido), `22_Faturamento.py` (Faturamento Org Vendas +
+parte de Análise Histórica) ou não tem mais página Streamlit (`ddic_lookup.py`/`db.py`
+seguem como CLI, ver §6/§4).
 
-**📊 Dashboards** — sem botão de "Buscar": a consulta roda direto ao mudar qualquer filtro
-(resultado cacheado 5 min por combinação de parâmetro via `st.cache_data`, pra não bater no
-banco de novo se você voltar pro mesmo filtro).
+A separação entre **Funil de Vendas** (+ Metas e Performance/Cadastros) e **Faturamento
+(Painel Vendas)** não é estética: são duas *consultas* diferentes sobre a mesma fonte
+(`vendas_sap.fct_faturamento_itens_sap`) — Funil de Vendas soma o total bruto (sem recorte
+comercial); Faturamento (Painel Vendas) passa pelo crosswalk cliente→setor
+(`scripts/query_faturamento_comercial.py`, ~52% de cobertura) pra poder quebrar por
+Canal/Divisional/Regional/Distrital/Setor. Ver `CONTEXTO_VENDAS_SAP.md` §10 — inclusive o
+histórico de por que uma versão anterior usava `vendas.fat_faturamento` (schema legado) e
+foi descartada. Ao criar uma página nova, decida o grupo pela consulta que ela usa, não pelo
+tema de negócio.
+
+Sem botão de "Buscar" na maioria: a consulta roda direto ao mudar qualquer filtro (resultado
+cacheado 5 min por combinação de parâmetro via `st.cache_data`, pra não bater no banco de
+novo se você voltar pro mesmo filtro).
+
+**Home** (sem seção, primeira da navegação):
 
 | Página | Reusa | O que mostra |
 |---|---|---|
-| `pages/0_Home.py` | `scripts/query_vendas_sap.py` | **Visão executiva** (2026-08-25): KPIs gerais (valor pendente, faturado no mês, valor em estoque, % backlog 60+ dias), evolução do faturamento nos últimos 12 meses, e "Pontos de atenção" calculados ao vivo (aging concentrado, backlog sem estoque, clientes bloqueados por crédito, devoluções recentes) — pensada pra leitura rápida tipo resumo pra diretoria, sem entrar no detalhe operacional |
-| `pages/1_Pendencias.py` | `scripts/query_vendas_sap.py` | Aging do backlog, cobertura de estoque, top clientes, backlog por tipo de ordem de venda — com gráficos de barra. Usa o filtro global de tipo de cliente, mas **não** a janela de dias (backlog precisa mostrar tudo em aberto, inclusive antigo) |
-| `pages/5_Jornada_Pedido.py` | `scripts/query_vendas_sap.py` | Oportunidade (Salesforce) → Pedido → Pendência → Fatura numa linha, com filtro global (dias/tipo de cliente) + filtro local por pedido/cliente/backlog aberto; abas de funil de conversão, divergência de valor Oportunidade x Pedido, aging por Governo x Privado e impacto de crédito bloqueado no backlog |
-| `pages/6_Estoque.py` | `scripts/query_vendas_sap.py` | 2 abas: **Restrito x Disponível** — Qualidade e Bloqueado quebrados separados (não somados), x Disponível, por Material+Centro, com filtro **Produto Acabado x Não Acabado** (`Tipo_Material` ZFER/ZPFA vs o resto, via `dim_material_sap`); **Validade dos lotes** — faixas Vencido/0-30/31-90/91-180/180+ dias, lotes mais urgentes primeiro. **Não** usa o filtro global — estoque não tem dimensão de cliente/data |
-| `pages/7_Credito_Devolucoes.py` | `scripts/query_vendas_sap.py` | Limite/exposição de crédito por cliente + devoluções/abatimentos com motivo em texto livre (fonte `vendas.dim_credito_devolucoes`). Usa o filtro global de tipo de cliente; a janela de dias só vale pra aba de devoluções |
-| `pages/8_Faturamento_Org_Vendas.py` | `scripts/query_vendas_sap.py` | Faturamento cruzando Organização de Vendas (SAP) x Linha de Negócio (Estética/Farma/Onco-Hemato/Não Alocado, via crosswalk `vendas.dim_cliente_setor` + `vendas.dim_estrutura`). Usa o filtro global completo (dias + tipo de cliente) |
-| `pages/10_Analise_Historica.py` | `scripts/query_vendas_sap.py` | Faturamento, pedidos entrando no funil e devoluções/abatimentos por mês (só essas 3 têm histórico real — backlog/estoque só guardam o estado de hoje). Comparação últimos 12 meses x 12 anteriores. **Não** usa o filtro global (janela própria em meses) |
-| `pages/11_Metas.py` | `scripts/query_vendas_sap.py` | Meta (planejamento, `vendas.fat_meta_equipe`) x Realizado (faturamento SAP), por mês x BU, com % de atingimento. Meta é decisão de orçamento — não tem fonte SAP/Salesforce, ver `CONTEXTO_VENDAS_SAP.md` §8.3. Realizado herda a cobertura ~52% do crosswalk cliente→setor; sobra vira BU 'NAO ALOCADO'. **Não** usa o filtro global (janela própria em meses + seletor de BU) |
-| `pages/16_Relatorio_Pedidos.py` | `scripts/query_vendas_sap.py` | Quantidade e valor médio de pedido por mês + ranking de pedidos por cliente — "pedido entrando no funil" é conceito de ordem de venda SAP, não de faturamento comercial (por isso fica aqui, não na seção Faturamento). Complementa (não duplica) `pages/10_Analise_Historica.py` |
+| `pages/0_Home.py` | `scripts/query_vendas_sap.py` + `scripts/query_faturamento_comercial.py` | Visão executiva em 2 blocos lado a lado, sem misturar: **Backlog e Operação** (`vendas_sap`, total bruto) e **Faturamento Comercial** (mesma fonte, via crosswalk cliente→setor, ~52% de cobertura) — mesma tabela fonte, escopo/consulta diferente, por isso os totais não somam entre os blocos. Resumo rápido tipo "pra diretoria", sem detalhe operacional |
 
-**💰 Faturamento (Painel Vendas)** — inspirada no Painel Vendas (Power BI) enviado pelo
+**Funil de Vendas** — segue a ordem cronológica do pedido (Oportunidade → Pedido →
+Pendência/Estoque → Remessa → Faturamento → Crédito e Devoluções):
+
+| Página | Reusa | O que mostra |
+|---|---|---|
+| `pages/19_Oportunidade.py` | `scripts/query_vendas_sap.py::correlacao_oportunidade_pedido_pendencia_fatura` | Funil Oportunidade (Salesforce) → Pedido → Pendência → Fatura, agregado em pandas pra visão de portfólio (funil por estágio, conversão, aging) |
+| `pages/20_Pedidos.py` | `scripts/query_vendas_sap.py` (`aging_pendencias`/`pendencia_status_estoque`/`pendencia_por_tipo_ordem_venda`/`top_clientes_pendentes`/`pedidos_mensal`/`pedidos_por_cliente`) + `scripts/trace_pedido.py` | Funde 3 páginas antigas: visão geral do backlog (aging, cobertura de estoque, top clientes, tipo de ordem), volume/valor médio de pedido por mês + ranking por cliente, e busca de 1 pedido específico pelas 3 camadas (SAP cru + Gold + Salesforce). Inclui o "Radar de pedido zumbi" (backlog antigo sem reserva viva no SAP) |
+| `pages/27_Pendencia_x_Estoque.py` | `scripts/query_vendas_sap.py::pendencia_x_estoque_global` | Visão global do backlog aberto: classifica cada item num `Motivo_Principal` real (Falso Positivo já faturado / Sem Estoque / Estoque Parcial / Financeiro-Crédito / Fiscal-Faturamento / Logístico-Remessa), quebra por Organização de Vendas, com drill-down até o estoque real na data do pedido (via `IB_SAPECC.MCHBH`) |
+| `pages/6_Estoque.py` | `scripts/query_vendas_sap.py::estoque_restrito_disponivel`/`estoque_validade_resumo`/`estoque_validade` | 2 abas: Restrito x Disponível (Qualidade/Bloqueado separados, por Material+Centro, filtro Produto Acabado x Não Acabado) e Validade dos lotes (faixas Vencido/0-30/31-90/91-180/180+ dias) |
+| `pages/21_Remessas.py` | `scripts/query_vendas_sap.py::remessas`/`remessas_resumo` | Volume (quantidade/peso) e data real de saída por remessa — os 4 campos de status SAP (`Wbsta`/`Lfgsa`/`Lvsta`/`Fksta`) estão 100% NULL nesta base, não dá pra filtrar/segmentar por eles |
+| `pages/22_Faturamento.py` | `scripts/query_vendas_sap.py::faturamento_por_org_vendas_linha_negocio`/`faturamento_mensal`/`devolucoes_mensal` | Visão executiva resumida: total bruto de `vendas_sap` cruzando Organização de Vendas x Linha de Negócio, mais faturamento/devoluções mensais. Diferente de Faturamento (Painel Vendas): aqui não passa pelo crosswalk cliente→setor |
+| `pages/7_Credito_Devolucoes.py` | `scripts/query_vendas_sap.py::credito_disponivel_clientes`/`devolucoes_credito_motivo` | Limite/exposição de crédito por cliente + devoluções/abatimentos com motivo em texto livre (fonte `vendas.dim_credito_devolucoes`) |
+
+**Metas e Performance** — acompanhamento, não fluxo de pedido:
+
+| Página | Reusa | O que mostra |
+|---|---|---|
+| `pages/11_Metas.py` | `scripts/query_vendas_sap.py::meta_vs_realizado_mensal` | Meta (planejamento, `vendas.fat_meta_equipe`) x Realizado (faturamento SAP), por mês x BU, com % de atingimento. Realizado herda a cobertura ~52% do crosswalk cliente→setor; sobra vira BU 'NAO ALOCADO' |
+| `pages/18_Visao_Vendedor.py` | `scripts/query_vendas_sap.py::faturamento_por_vendedor`/`faturamento_vendedor_mensal`/`top_clientes_por_vendedor` | Ranking e drill-down individual de faturamento por vendedor. `Codigo_Vendedor` só é confiável quando `Origem_Vendedor='SALESFORCE'` (~82% dos itens, medido 2026-08-26) — a origem SAP está sempre vazia em produção |
+| `pages/24_Vendedor_x_Meta.py` | `scripts/query_vendas_sap.py::faturamento_vendedor_com_meta_bu` | Faturamento real por vendedor ao lado do atingimento de meta da BU dele — não existe meta oficial por vendedor na base, só por Setor/BU |
+
+**Cadastros** — consulta pontual de dimensão:
+
+| Página | Reusa | O que mostra |
+|---|---|---|
+| `pages/25_Cliente_360.py` | `scripts/query_vendas_sap.py::cliente_360` | Pedido/pendência/fatura + crédito + devoluções, tudo por cliente — busca por `Codigo_Cliente` |
+| `pages/23_Material.py` | `scripts/query_vendas_sap.py::materiais_catalogo`/`ficha_material` | Ficha de cadastro do material (`dim_material_sap`): descrição, tipo, status, unidade de medida, peso — sem quantidade/estoque (isso mora em Estoque/Pendência x Estoque) |
+
+**Faturamento (Painel Vendas)** — inspirada no Painel Vendas (Power BI) enviado pelo
 usuário (2026-08-25), sobre `scripts/query_faturamento_comercial.py` — **mesma fonte**
-(`vendas_sap.fct_faturamento_itens_sap`) de 📊 Dashboards, mas passando pelo crosswalk
+(`vendas_sap.fct_faturamento_itens_sap`) do Funil de Vendas, mas passando pelo crosswalk
 cliente→setor pra ganhar a quebra comercial (~52% de cobertura — cliente sem match cai em
 'NAO ALOCADO'). Ver `CONTEXTO_VENDAS_SAP.md` §10 pro histórico completo (inclusive por que
 não bate mais 1:1 com o Painel Vendas de referência que a inspirou). Todas usam o filtro
@@ -192,19 +228,17 @@ gráfico/tabela — não confundir com o seletor "Quebrar por", que muda o que a
 |---|---|---|
 | `pages/12_Painel_Vendas.py` | `scripts/query_faturamento_comercial.py` | 3 abas (fundidas em 2026-09-04, cada 1 com filtro de recorte próprio): **MTD/YTD/Trimestral** — gauges + Meta x Realizado por Canal/Linha de Negócio/Divisional/Regional/Distrital/Setor/Família; **Diário** — dia/MTD + Estado (UF), sempre mês corrente (não o filtro global); **Anual (YoY)** — comparativo YTD ano corrente x ano anterior + top clientes |
 | `pages/15_Produto_Cliente.py` | `scripts/query_faturamento_comercial.py` | Faturamento e preço médio por mês, SKUs vendidos/clientes atendidos por mês, ranking mensal (matriz) e média dos últimos 6 meses por Cliente/Família/Produto |
-| `pages/17_Relatorio_Analitico.py` | `scripts/query_faturamento_comercial.py` | Detalhe linha a linha (1 linha = 1 item de fatura) com seletor de colunas — a única que não agrega. Consulta mais pesada (join linha a linha via `dim_material_sap` pra "Nome Produto", resolvido em 2 passos — ver `CONTEXTO_VENDAS_SAP.md` §6.10) |
-| `pages/17_Relatorio_Analitico.py` | `scripts/query_faturamento_comercial.py` | Detalhe linha a linha (1 linha = 1 item de fatura) com seletor de colunas (`st.multiselect`) — diferente das outras 4, não agrega. Período livre (não é MTD/YTD fixo) |
+| `pages/17_Relatorio_Analitico.py` | `scripts/query_faturamento_comercial.py` | Detalhe linha a linha (1 linha = 1 item de fatura) com seletor de colunas (`st.multiselect`) — a única que não agrega. Consulta mais pesada (join linha a linha via `dim_material_sap` pra "Nome Produto", resolvido em 2 passos — ver `CONTEXTO_VENDAS_SAP.md` §6.10). Período livre (não é MTD/YTD fixo) |
 
-**🛠️ Técnico** — ferramentas de investigação pontual, mantidas com botão/input porque
-precisam de um valor específico (número de pedido, tabela SAP) pra fazer sentido; não tem
-"estado padrão" que valha rodar sozinho, e por isso não usam o filtro global.
+**Técnico** — ferramentas de investigação pontual, mantidas com botão/input porque
+precisam de um valor específico pra fazer sentido; não tem "estado padrão" que valha rodar
+sozinho, e por isso não usam o filtro global. Só resta a Auditoria do Fluxo como página
+Streamlit hoje — Rastrear Pedido virou aba de `pages/20_Pedidos.py`, e DDIC Lookup/
+Conectividade não têm mais página própria (seguem só como CLI, ver §6 e `scripts/db.py`):
 
 | Página | Reusa | O que mostra |
 |---|---|---|
 | `pages/2_Auditoria.py` | `scripts/audit_pendencia_flow.py` | As 4 checagens de §8, com seleção de quais rodar |
-| `pages/3_Rastrear_Pedido.py` | `scripts/trace_pedido.py` | Rastreamento de um pedido pelas 3 camadas, em expansores |
-| `pages/4_DDIC_Lookup.py` | `scripts/ddic_lookup.py` | Consulta de tabela/campo SAP |
-| `pages/9_Conectividade.py` | `scripts/db.py` | Botão de conectividade (SQL Server BRONZE/SILVER/GOLD + HANA) — movida da Home (2026-08-25), é diagnóstico técnico, não KPI de negócio |
 
 ### 9.1 Filtro de Período + Tipo de cliente (local a cada página, não mais no sidebar)
 
@@ -214,8 +248,8 @@ efeito em outro). Agora cada página que usa chama uma função de
 `scripts/ui_theme.py` no topo do próprio corpo:
 
 - `render_filtro_periodo_tipo_cliente()` — Período (`st.date_input` com range) + Tipo de
-  cliente. Usada por: Oportunidade, Faturamento, Vendedor, Crédito e Devoluções, Vendedor x
-  Meta x Faturamento.
+  cliente. Usada por: Oportunidade, Remessas, Faturamento, Vendedor, Crédito e Devoluções,
+  Vendedor x Meta x Faturamento.
 - `render_filtro_tipo_cliente()` — só Tipo de cliente (a página tem sua própria janela de
   tempo, período não faria sentido). Usada por: Pedidos, Painel Vendas, Produto/Cliente,
   Relatório Analítico.
@@ -264,9 +298,10 @@ Cada página faz consulta **ao vivo** em produção — não é um snapshot est�
 scripts de `query_vendas_sap.py` e `audit_pendencia_flow.py` já retornam `pandas.DataFrame`,
 e `trace_pedido.py` retorna um dict `{titulo: DataFrame}`, adicionar uma página nova é só
 importar a função e chamar `st.dataframe(df)` — não precisa reescrever a lógica de consulta.
-Pra adicionar aos Dashboards, registrar em `app.py` (dentro de `st.navigation`) e envolver a
-chamada da função num wrapper `@st.cache_data` local à página, do jeito que as páginas
-5/6/7/8 já fazem — mantém `scripts/` livre de import de `streamlit` (reusável em CLI/notebook).
+Pra adicionar uma página nova, registrar em `app.py` (dentro de `st.navigation`, no grupo
+certo — ver §9) e envolver a chamada da função num wrapper `@st.cache_data` local à página,
+do jeito que a maioria das páginas atuais já faz — mantém `scripts/` livre de import de
+`streamlit` (reusável em CLI/notebook).
 
 ## 10. Comandos rápidos (cheat sheet)
 

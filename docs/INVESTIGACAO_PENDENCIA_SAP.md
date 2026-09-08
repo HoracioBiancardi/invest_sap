@@ -115,14 +115,24 @@ contra `SILVER.dataspherev2.vbap` (469.008 linhas, sem erro de runtime, sem divi
 zero) e confirmei o pedido 137490 corrigido: `1092` unidades, `R$ 153,03` unitário — bate
 com `NETWR/NETPR` original.
 
-**Ainda não commitado remotamente nem passou por `dbt run`/`dbt build`** — precisa validar
-em dev antes do próximo deploy em `GOLD`. Ver §8 (Próximos passos).
+**Atualização (2026-09-05) — fix confirmado em produção.** Na época deste registro (2026-08-24)
+o commit ainda não tinha passado por `dbt run`/`dbt build`. Reconferido ao vivo em
+`GOLD.vendas_sap` em 2026-09-05: `fct_vendas_itens_sap` tem **0 itens** com
+`Qtd_Pedida_Original=0 AND Valor_Liquido_Pedido>0` (eram ~7.000 itens/R$2,45bi+ em `ZVCO`,
+ver §3) — o fix está deployado. O pedido 137490 em `fct_pendencia_sap` hoje mostra
+`Qtd_Pedida=1092` (não mais 0) e, coincidentemente, já está `Qtd_Remetida=1092`/
+`Qtd_Faturada=1092`/`Status_Faturamento='Totalmente Faturado'`/`Status_Pendencia='Concluido'`
+— o item foi remetido/faturado por completo depois da correção entrar em produção, não
+ficou pendente como a previsão original (`Flag_Pendencia=1`, "Pendente Logistico e Fiscal")
+chegou a supor; o essencial (a quantidade deixou de ser mascarada como zero) está confirmado.
+Ver §7 pra reconferência completa da auditoria pós-deploy.
 
 ## 7. Auditoria do fluxo — resultados
 
 Depois do fix aplicado localmente (mas **antes do deploy**), rodei
 `scripts/audit_pendencia_flow.py` (ver `COMO_RODAR.md` para o que cada checagem faz) pra
-ver se havia problemas parecidos em outros lugares do fluxo. Resultado (2026-08-24):
+ver se havia problemas parecidos em outros lugares do fluxo. Resultado (2026-08-24, **estado
+pré-deploy** — ver §7.1 pra reconferência depois do fix ter ido pra produção):
 
 - **`valor_sem_quantidade`**: confirma os números da §3 acima (`fct_vendas_itens_sap`,
   `fct_vendas_canceladas_sap`). `fct_faturamento_itens_sap` e o `dim_pendencia` legado
@@ -145,16 +155,22 @@ ver se havia problemas parecidos em outros lugares do fluxo. Resultado (2026-08-
   cadastrado no pedido mas ausente/desatualizado na respectiva dimensão. Fica como próximo
   item de investigação se alguém notar produtos "sem nome" em algum relatório.
 
+## 7.1 Reconferência pós-deploy (2026-09-05)
+
+- ✅ **Deploy do fix:** confirmado em produção (ver §6) — não está mais pendente.
+- ✅ **`valor_sem_quantidade`/`pendencia_escondida` zeraram:** reconferido ao vivo em
+  `GOLD.vendas_sap.fct_pendencia_sap` em 2026-09-05 — **0 itens** batem em
+  `Status_Pendencia='Concluido' AND Valor_Liquido_Pedido>0 AND Qtd_Remetida=0 AND
+  Qtd_Faturada=0` (eram 15 antes do deploy). O fix cobriu o que se propôs a cobrir.
+- ⏳ **`integridade_dimensoes` ainda aberto**, números cresceram um pouco com o tempo (natural,
+  base viva): **1.654** itens sem `Descricao_Produto` (era 1.621), **70** sem `Nome_Cliente`
+  (era 66), **24** sem `Nome_Centro` (igual). Continua sem investigar a causa raiz — ver
+  proposta 3.9 de `docs/REGRAS_E_MELHORIAS_DW.md`.
+
 ## 8. Próximos passos desta investigação
 
-- **Deploy do fix (pendente):** o commit `33d0cf49` está só local. Falta: validar em
-  ambiente de dev/staging, dar push, rodar
-  `dbt build --select fct_vendas_itens_sap+ fct_vendas_canceladas_sap+ dim_pendencia+`
-  (o `+` reconstrói os models downstream) e então conferir de novo o pedido 137490 em
-  `GOLD.vendas_sap.fct_pendencia_sap` (deve virar `Flag_Pendencia=1`,
-  `Status_Pendencia='Pendente Logistico e Fiscal'`).
-- **Re-rodar a auditoria pós-deploy:** `valor_sem_quantidade` e `pendencia_escondida`
-  devem zerar depois que o fix for pra produção. Se não zerarem, o fix não cobriu tudo.
-- **Investigar `integridade_dimensoes`:** os 1.621 itens sem `Descricao_Produto` (§7) —
+- ~~Deploy do fix~~ — feito, ver §6/§7.1.
+- ~~Re-rodar a auditoria pós-deploy~~ — feito, ver §7.1: zerou como esperado.
+- **Investigar `integridade_dimensoes`:** os itens sem `Descricao_Produto` (§7/§7.1) —
   é uma dimensão desatualizada, uma chave de join divergente, ou material realmente sem
-  cadastro completo?
+  cadastro completo? (ver também proposta 3.9 de `docs/REGRAS_E_MELHORIAS_DW.md`)

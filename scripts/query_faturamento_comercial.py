@@ -36,8 +36,10 @@ import pandas as pd
 
 try:
     from scripts.db import read_sql
+    from scripts.query_vendas_sap import _chave_org_vda_cli_sql, converter_para_brl
 except ImportError:
     from db import read_sql
+    from query_vendas_sap import _chave_org_vda_cli_sql, converter_para_brl
 
 SCHEMA = "vendas_sap"
 
@@ -45,14 +47,22 @@ SCHEMA = "vendas_sap"
 # Distrital/Setor/Linha de Negócio/Canal) — mesmo crosswalk de
 # `query_vendas_sap.py::faturamento_por_org_vendas_linha_negocio`. Sem "WITH" na frente de
 # propósito: quem usa concatena com as próprias CTEs (ex.: `meta_vs_realizado_por_dimensao`).
+#
+# Achado GRAVE de auditoria (2026-09-06, ver `query_vendas_sap.py::_chave_org_vda_cli_sql`):
+# até essa data, `cliente_setor_atual` pegava o `cod_setor` mais recente do cliente
+# IGNORANDO em qual Organização de Vendas a transação aconteceu — só que o mesmo cliente
+# pode ter `cod_setor` (e portanto Divisional/Regional/Distrital/Linha de Negócio) diferente
+# conforme a Org. Medido o impacto em faturamento (12 meses): R$510,9 milhões (14,1%) tinham
+# a dimensão comercial errada por causa disso. Fix: casar por `chave_org_vda_cli`
+# (cliente+Org), não só cliente.
 _CTE_ESTRUTURA_COMERCIAL = """
     cliente_setor_atual AS (
-        SELECT cod_cliente, cod_setor,
-               ROW_NUMBER() OVER (PARTITION BY cod_cliente ORDER BY periodo DESC) AS rn
+        SELECT chave_org_vda_cli, cod_setor,
+               ROW_NUMBER() OVER (PARTITION BY chave_org_vda_cli ORDER BY periodo DESC) AS rn
         FROM vendas.dim_cliente_setor
     ),
     estrutura_comercial AS (
-        SELECT cs.cod_cliente, e.cod_setor, e.org_vendas, e.divisional, e.regional,
+        SELECT cs.chave_org_vda_cli, e.cod_setor, e.org_vendas, e.divisional, e.regional,
                e.distrital, e.descricao
         FROM cliente_setor_atual cs
         JOIN vendas.dim_estrutura e ON cs.cod_setor = e.cod_setor
@@ -61,16 +71,17 @@ _CTE_ESTRUTURA_COMERCIAL = """
 """
 
 # JOIN de cliente (nome/CNPJ/UF, via `vendas_sap.dim_cliente_sap` — não crosswalk, cobertura
-# alta) + estrutura comercial (via a CTE acima, cobertura ~52%). Ambos baratos o bastante
-# (~4s testado) pra incluir sempre, mesmo quando a dimensão pedida não precisa dos dois —
-# simplifica o código e evita bug de "join faltando" por engano.
-_JOIN_CLIENTE_ESTRUTURA = """
+# alta) + estrutura comercial (via a CTE acima, cobertura ~52%, casada por cliente+Org — ver
+# achado acima). Ambos baratos o bastante (~4s testado) pra incluir sempre, mesmo quando a
+# dimensão pedida não precisa dos dois — simplifica o código e evita bug de "join faltando"
+# por engano.
+_JOIN_CLIENTE_ESTRUTURA = f"""
     LEFT JOIN (
         SELECT DISTINCT Codigo_Cliente, Nome_Cliente, CNPJ_CPF, Estado_UF
         FROM vendas_sap.dim_cliente_sap
     ) cl ON f.Codigo_Cliente = cl.Codigo_Cliente
     LEFT JOIN estrutura_comercial ec
-        ON CAST(f.Codigo_Cliente AS BIGINT) = CAST(ec.cod_cliente AS BIGINT)
+        ON {_chave_org_vda_cli_sql("f.Codigo_Cliente", "f.Codigo_Org_Vendas")} = ec.chave_org_vda_cli
 """
 
 _JOIN_PRODUTO = "LEFT JOIN vendas.dim_produto p ON f.Codigo_Produto = p.material"
@@ -288,6 +299,10 @@ def faturamento_por_dimensao(
         filtros: `{dimensao: valor}` opcional — **recorta** o resultado a um valor específico
             de outra(s) dimensão(ões), sem mudar o que aparece nas linhas. Ver
             `_aplicar_filtros`.
+
+    Achado 2026-09-04 (ver §10.0/§10.1 e docs/CONTEXTO_VENDAS_SAP.md): `f.Moeda` varia por
+    linha (BRL/UYU/COP/USD/CLP, sem conversão) — sai no grão do retorno, some/mostre por
+    moeda separada, nunca junte tudo num só R$.
     """
     if dimensao not in DIMENSOES_FATURAMENTO:
         raise ValueError(
@@ -328,6 +343,7 @@ def faturamento_por_dimensao(
         SELECT
             {colunas_tempo}
             {dim_expr} AS Dimensao,
+            f.Moeda,
             SUM(f.Valor_Liquido_Faturamento) AS Valor_Faturado,
             SUM(f.Qtd_Faturada) AS Qtd_Faturada,
             COUNT(*) AS Qtd_Itens
@@ -337,7 +353,7 @@ def faturamento_por_dimensao(
         {join_material}
         WHERE f.Data_Faturamento BETWEEN :data_inicio AND :data_fim
             {where_tipo_cliente}{where_filtros}
-        GROUP BY {group_tempo} {dim_expr}
+        GROUP BY {group_tempo} {dim_expr}, f.Moeda
         ORDER BY Valor_Faturado DESC
         OPTION (RECOMPILE)
     """  # nosec B608
@@ -357,6 +373,8 @@ def faturamento_serie(
     Args:
         granularidade: "dia" ou "mes".
         tipo_cliente, filtros: ver `faturamento_por_dimensao`.
+
+    `Moeda` sai no grão do retorno (achado 2026-09-04, ver `faturamento_por_dimensao`).
     """
     if granularidade not in ("dia", "mes"):
         raise ValueError(f"granularidade deve ser 'dia' ou 'mes', recebido: {granularidade!r}")
@@ -379,6 +397,7 @@ def faturamento_serie(
         WITH {_CTE_ESTRUTURA_COMERCIAL}
         SELECT
             {tempo_expr} AS {col_tempo},
+            f.Moeda,
             SUM(f.Valor_Liquido_Faturamento) AS Valor_Faturado,
             SUM(f.Qtd_Faturada) AS Qtd_Faturada
         FROM {SCHEMA}.fct_faturamento_itens_sap f
@@ -387,7 +406,7 @@ def faturamento_serie(
         {join_material}
         WHERE f.Data_Faturamento BETWEEN :data_inicio AND :data_fim
             {where_tipo_cliente}{where_filtros}
-        GROUP BY {tempo_expr}
+        GROUP BY {tempo_expr}, f.Moeda
         ORDER BY {col_tempo}
         OPTION (RECOMPILE)
     """  # nosec B608
@@ -447,9 +466,15 @@ def meta_vs_realizado_por_dimensao(
     `scripts/query_vendas_sap.py::meta_vs_realizado_mensal`) — herda a cobertura ~52%:
     faturamento de cliente sem `cod_setor` mapeado não desaparece, cai em `'NAO ALOCADO'`.
 
-    Canal='MS' isola o cliente Ministério da Saúde por nome (ver `CLIENTE_MS_LIKE`) — a Meta
-    não tem esse recorte nativamente (o cliente não é separado do resto do 'Publico' da Org
-    Vendas na meta orçamentária), então Meta de Canal='MS' aparece sempre 0/NULL.
+    Canal='MS' isola o cliente Ministério da Saúde por nome no lado Realizado (ver
+    `CLIENTE_MS_LIKE`). No lado Meta, `dim_estrutura` já tem nós "- MS" nativos (cod_setor
+    701/702/703000000, um por Org Vendas comercial, espelhando os nós "- Publico"), e
+    `_par_expr_meta` já reconhece `e.descricao LIKE '% - MS'` — confirmado ao vivo em
+    2026-09-05: `Meta_Valor` de Canal='MS' é real e não-zero na maioria dos meses de 2025
+    (ex. R$59,6mi em março), não "sempre 0/NULL" como uma versão anterior deste docstring
+    dizia. Só falta meta em alguns meses esparsos (maio/outubro/novembro de 2025) — dado
+    de planejamento incompleto, não um bug de join. Ver `docs/CONTEXTO_VENDAS_SAP.md` §10.2
+    e `docs/REGRAS_E_MELHORIAS_DW.md` regra 1.5.4 (corrigidos).
 
     Args:
         dimensao: uma chave de `DIMENSOES_META` — a dimensão a **agrupar**.
@@ -457,6 +482,16 @@ def meta_vs_realizado_por_dimensao(
         filtros: `{dimensao: valor}` opcional, **só chaves de `DIMENSOES_META`** — aplicado
             nos dois lados. Uma chave que exista em `DIMENSOES_FATURAMENTO` mas não em
             `DIMENSOES_META` (ex.: "Cliente", "Produto") é ignorada aqui silenciosamente.
+
+    Achado 2026-09-04: `Meta_Valor` é planejamento orçamentário, sempre BRL (não existe meta
+    em moeda estrangeira); `Valor_Realizado` agora é convertido pra BRL (taxa real do SAP,
+    `TCURR`, ver `scripts/query_vendas_sap.py::converter_para_brl`) antes de comparar com a
+    meta — não filtra mais `Moeda='BRL'` (isso subestimava o realizado, ignorando faturamento
+    em moeda estrangeira inteiro). Conversão em 2 passos (Realizado x Meta não dá pra fazer
+    num FULL OUTER JOIN só em SQL Server, porque a taxa de câmbio mora no HANA, outro banco
+    — juntar os dois ANTES de converter faria fan-out de `Meta_Valor` por moeda): busca
+    Realizado por Mes+Dimensao+Moeda, converte e reagrega pra Mes+Dimensao em pandas, só
+    depois junta com Meta.
     """
     if dimensao not in DIMENSOES_META:
         raise ValueError(
@@ -486,47 +521,51 @@ def meta_vs_realizado_por_dimensao(
             joins_meta_extra_filtro.add(f_join_meta)
     join_meta_extra = " ".join({join_meta_extra, *joins_meta_extra_filtro} - {""})
 
-    query = f"""
-        WITH {_CTE_ESTRUTURA_COMERCIAL},
-        realizado AS (
-            SELECT
-                FORMAT(f.Data_Faturamento, 'yyyy-MM') AS mes,
-                {dim_realizado} AS Dimensao,
-                SUM(f.Valor_Liquido_Faturamento) AS valor_realizado,
-                SUM(f.Qtd_Faturada) AS unidades_realizado
-            FROM {SCHEMA}.fct_faturamento_itens_sap f
-            {_JOIN_CLIENTE_ESTRUTURA}
-            {_JOIN_PRODUTO if dimensao == "Família" else ""}
-            WHERE f.Data_Faturamento BETWEEN :data_inicio AND :data_fim
-                {where_realizado_extra}
-            GROUP BY FORMAT(f.Data_Faturamento, 'yyyy-MM'), {dim_realizado}
-        ),
-        meta AS (
-            SELECT
-                FORMAT(m.data_meta, 'yyyy-MM') AS mes,
-                {dim_meta} AS Dimensao,
-                SUM(m.meta) AS meta_valor,
-                SUM(m.unidades) AS meta_unidades
-            FROM vendas.fat_meta_equipe m
-            LEFT JOIN vendas.dim_estrutura e ON m.cod_setor = e.cod_setor
-            {join_meta_extra}
-            WHERE m.data_meta BETWEEN :data_inicio AND :data_fim{where_meta_extra}
-            GROUP BY FORMAT(m.data_meta, 'yyyy-MM'), {dim_meta}
-        )
+    realizado_query = f"""
+        WITH {_CTE_ESTRUTURA_COMERCIAL}
         SELECT
-            COALESCE(r.mes, mt.mes) AS Mes,
-            COALESCE(r.Dimensao, mt.Dimensao) AS Dimensao,
-            SUM(mt.meta_valor) AS Meta_Valor,
-            SUM(mt.meta_unidades) AS Meta_Unidades,
-            SUM(r.valor_realizado) AS Valor_Realizado,
-            SUM(r.unidades_realizado) AS Unidades_Realizado
-        FROM realizado r
-        FULL OUTER JOIN meta mt ON r.mes = mt.mes AND r.Dimensao = mt.Dimensao
-        GROUP BY COALESCE(r.mes, mt.mes), COALESCE(r.Dimensao, mt.Dimensao)
-        ORDER BY Mes, Dimensao
+            FORMAT(f.Data_Faturamento, 'yyyy-MM') AS Mes,
+            {dim_realizado} AS Dimensao,
+            f.Moeda,
+            SUM(f.Valor_Liquido_Faturamento) AS Valor_Realizado,
+            SUM(f.Qtd_Faturada) AS Unidades_Realizado
+        FROM {SCHEMA}.fct_faturamento_itens_sap f
+        {_JOIN_CLIENTE_ESTRUTURA}
+        {_JOIN_PRODUTO if dimensao == "Família" else ""}
+        WHERE f.Data_Faturamento BETWEEN :data_inicio AND :data_fim
+            {where_realizado_extra}
+        GROUP BY FORMAT(f.Data_Faturamento, 'yyyy-MM'), {dim_realizado}, f.Moeda
         OPTION (RECOMPILE)
     """  # nosec B608
-    return read_sql(query, database="GOLD", params=params)
+    df_realizado = read_sql(realizado_query, database="GOLD", params=params)
+    if not df_realizado.empty:
+        df_realizado["Valor_Realizado"] = converter_para_brl(
+            df_realizado, "Valor_Realizado", data_col="Mes"
+        ).fillna(0.0)
+        df_realizado = (
+            df_realizado.groupby(["Mes", "Dimensao"], as_index=False)
+            .agg(Valor_Realizado=("Valor_Realizado", "sum"), Unidades_Realizado=("Unidades_Realizado", "sum"))
+        )
+
+    meta_query = f"""
+        SELECT
+            FORMAT(m.data_meta, 'yyyy-MM') AS Mes,
+            {dim_meta} AS Dimensao,
+            SUM(m.meta) AS Meta_Valor,
+            SUM(m.unidades) AS Meta_Unidades
+        FROM vendas.fat_meta_equipe m
+        LEFT JOIN vendas.dim_estrutura e ON m.cod_setor = e.cod_setor
+        {join_meta_extra}
+        WHERE m.data_meta BETWEEN :data_inicio AND :data_fim{where_meta_extra}
+        GROUP BY FORMAT(m.data_meta, 'yyyy-MM'), {dim_meta}
+        OPTION (RECOMPILE)
+    """  # nosec B608
+    df_meta = read_sql(meta_query, database="GOLD", params=params)
+
+    resultado = df_realizado.merge(df_meta, on=["Mes", "Dimensao"], how="outer")
+    for col in ("Meta_Valor", "Meta_Unidades", "Valor_Realizado", "Unidades_Realizado"):
+        resultado[col] = resultado.get(col, 0.0)
+    return resultado.sort_values(["Mes", "Dimensao"]).reset_index(drop=True)
 
 
 def faturamento_anual_comparativo(
@@ -544,6 +583,11 @@ def faturamento_anual_comparativo(
         ano_atual: ano de referência (default: ano corrente).
         filtros: ver `faturamento_por_dimensao` / `_aplicar_filtros` — repassado às 3
             chamadas internas.
+
+    Convertido pra BRL (achado 2026-09-04) — `faturamento_por_dimensao` traz 1 linha por
+    Dimensao+Mes+Moeda (chamado aqui com `granularidade="mes"` de propósito, mesmo sem
+    quebra temporal no resultado final, só pra ter uma data por linha e converter com a
+    taxa do mês certo); convertido e reagregado por Dimensao antes de virar coluna.
     """
     if ano_atual is None:
         ano_atual = date.today().year
@@ -552,17 +596,20 @@ def faturamento_anual_comparativo(
     corte_mes_dia = (hoje.month, hoje.day)
 
     df_ano_anterior = faturamento_por_dimensao(
-        date(ano_anterior, 1, 1), date(ano_anterior, 12, 31), dimensao, filtros=filtros
+        date(ano_anterior, 1, 1), date(ano_anterior, 12, 31), dimensao, granularidade="mes", filtros=filtros
     )
     df_ytd_ano_anterior = faturamento_por_dimensao(
-        date(ano_anterior, 1, 1), date(ano_anterior, *corte_mes_dia), dimensao, filtros=filtros
+        date(ano_anterior, 1, 1), date(ano_anterior, *corte_mes_dia), dimensao, granularidade="mes", filtros=filtros
     )
-    df_ytd_atual = faturamento_por_dimensao(date(ano_atual, 1, 1), hoje, dimensao, filtros=filtros)
+    df_ytd_atual = faturamento_por_dimensao(
+        date(ano_atual, 1, 1), hoje, dimensao, granularidade="mes", filtros=filtros
+    )
 
     def _serie(df: pd.DataFrame) -> pd.Series:
-        return (
-            df.set_index("Dimensao")["Valor_Faturado"] if not df.empty else pd.Series(dtype=float)
-        )
+        if df.empty:
+            return pd.Series(dtype=float)
+        valores_brl = converter_para_brl(df, "Valor_Faturado", data_col="Mes").fillna(0.0)
+        return df.assign(Valor_BRL=valores_brl).groupby("Dimensao")["Valor_BRL"].sum()
 
     resultado = pd.DataFrame(
         {
@@ -584,7 +631,16 @@ def top_clientes_periodo(
     tipo_cliente: Optional[str] = None,
     filtros: Optional[dict[str, str]] = None,
 ) -> pd.DataFrame:
-    """Top N clientes por Faturamento no período, com preço médio e unidades."""
+    """Top N clientes por Faturamento no período (convertido pra BRL), com preço médio e
+    unidades.
+
+    Achado 2026-09-04: não dá mais `TOP N` direto no SQL Server — o valor lá está em moeda
+    original (sem converter), então ordenar por ele no banco rankeia errado (ex.: cliente
+    com pouco faturamento real em BRL mas número bruto grande em moeda de valor unitário
+    baixo poderia aparecer artificialmente alto, e o oposto). Busca todos os clientes do
+    período (por Cliente+Mes+Moeda, pra converter com a taxa do mês certo), converte,
+    reagrega por cliente, só then pega os top N pelo valor já em BRL.
+    """
     params: dict[str, object] = {"data_inicio": data_inicio, "data_fim": data_fim}
     where_filtros, precisa_produto, precisa_material = _aplicar_filtros(filtros, params)
     where_tipo_cliente = ""
@@ -596,22 +652,35 @@ def top_clientes_periodo(
     join_material = _JOIN_MATERIAL_SAP if precisa_material else ""
     query = f"""
         WITH {_CTE_ESTRUTURA_COMERCIAL}
-        SELECT TOP {int(n)}
+        SELECT
             COALESCE(cl.Nome_Cliente, 'NAO INFORMADO') AS Nome_Cliente,
+            FORMAT(f.Data_Faturamento, 'yyyy-MM') AS Mes,
+            f.Moeda,
             SUM(f.Valor_Liquido_Faturamento) AS Valor_Faturado,
-            SUM(f.Qtd_Faturada) AS Qtd_Faturada,
-            SUM(f.Valor_Liquido_Faturamento) / NULLIF(SUM(f.Qtd_Faturada), 0) AS Preco_Medio
+            SUM(f.Qtd_Faturada) AS Qtd_Faturada
         FROM {SCHEMA}.fct_faturamento_itens_sap f
         {_JOIN_CLIENTE_ESTRUTURA}
         {join_produto}
         {join_material}
         WHERE f.Data_Faturamento BETWEEN :data_inicio AND :data_fim
             {where_tipo_cliente}{where_filtros}
-        GROUP BY cl.Nome_Cliente
-        ORDER BY Valor_Faturado DESC
+        GROUP BY cl.Nome_Cliente, FORMAT(f.Data_Faturamento, 'yyyy-MM'), f.Moeda
         OPTION (RECOMPILE)
     """  # nosec B608
-    return read_sql(query, database="GOLD", params=params)
+    df = read_sql(query, database="GOLD", params=params)
+    if df.empty:
+        return df
+
+    df["Valor_BRL"] = converter_para_brl(df, "Valor_Faturado", data_col="Mes").fillna(0.0)
+    resumo = (
+        df.groupby("Nome_Cliente", as_index=False)
+        .agg(Valor_Faturado=("Valor_BRL", "sum"), Qtd_Faturada=("Qtd_Faturada", "sum"))
+        .sort_values("Valor_Faturado", ascending=False)
+        .head(int(n))
+        .reset_index(drop=True)
+    )
+    resumo["Preco_Medio"] = resumo["Valor_Faturado"] / resumo["Qtd_Faturada"].replace(0, pd.NA)
+    return resumo
 
 
 def skus_ativos_periodo(
@@ -672,6 +741,7 @@ COLUNAS_RELATORIO_ANALITICO = {
     "Nome Produto": "m.Descricao_Produto",
     "Tipo Documento Faturamento": "f.Tipo_Documento_Faturamento",
     "Qtd Faturada": "f.Qtd_Faturada",
+    "Moeda": "f.Moeda",
     "Valor Faturado": "f.Valor_Liquido_Faturamento",
     "Preço Unitário": "f.Valor_Unitario_Faturado",
 }

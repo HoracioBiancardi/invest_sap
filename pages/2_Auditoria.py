@@ -1,7 +1,13 @@
-"""Página: auditoria do fluxo — reusa scripts/audit_pendencia_flow.py.
+"""Página: auditoria do fluxo — reusa scripts/audit_pendencia_flow.py + 1 checagem comercial.
 
-Ver docs/INVESTIGACAO_PENDENCIA_SAP.md §7 para o histórico da primeira rodada e o que os
-resultados significaram.
+Ver docs/INVESTIGACAO_PENDENCIA_SAP.md §7 para o histórico da primeira rodada de
+audit_pendencia_flow e o que os resultados significaram.
+
+A checagem `linha_negocio_rh_vs_estrutura` (2026-09-05) é diferente das outras 4 — não vem de
+`audit_pendencia_flow.py` (que é só sobre o fluxo de pendência), reusa
+`scripts/query_vendas_sap.py::auditoria_linha_negocio_rh_vs_estrutura` — ver docstring da
+função e `docs/REGRAS_E_MELHORIAS_DW.md` §4.13 pro contexto completo (achado ao investigar
+como reduzir a dependência de `vendas.dim_estrutura`).
 """
 
 from __future__ import annotations
@@ -14,7 +20,8 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.audit_pendencia_flow import CHECKS  # noqa: E402
+from scripts.audit_pendencia_flow import CHECKS as CHECKS_PENDENCIA  # noqa: E402
+from scripts.query_vendas_sap import auditoria_linha_negocio_rh_vs_estrutura  # noqa: E402
 from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Auditoria do Fluxo — Vendas SAP", page_icon="🩺", layout="wide")
@@ -24,11 +31,17 @@ st.caption(
     "ver `docs/COMO_RODAR.md` §8 para o que cada checagem faz."
 )
 
+CHECKS = {**CHECKS_PENDENCIA, "linha_negocio_rh_vs_estrutura": auditoria_linha_negocio_rh_vs_estrutura}
+
 DESCRICOES = {
     "valor_sem_quantidade": "Linha com valor > 0 e quantidade = 0 (o padrão do bug KWMENG/ZMENG).",
     "pendencia_escondida": "'Concluido' com valor > 0 mas zero remessa e zero fatura — sintoma genérico.",
     "reconciliacao_contagem": "Contagem SAP cru (HANA) vs Gold, por tipo de pedido — detecta join quebrado.",
     "integridade_dimensoes": "% de linhas com join de dimensão falho (cliente/centro/produto sem nome).",
+    "linha_negocio_rh_vs_estrutura": (
+        "Cliente onde a Unidade de Negócio do vendedor (RH) discorda da Linha de Negócio "
+        "manual (dim_estrutura) — candidato a rótulo desatualizado, não certeza de erro."
+    ),
 }
 
 selecionadas = st.multiselect(

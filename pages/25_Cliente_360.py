@@ -15,7 +15,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.query_vendas_sap import buscar_cliente_por_nome, cliente_360, top_clientes_pendentes  # noqa: E402
-from scripts.ui_theme import card  # noqa: E402
+from scripts.ui_theme import card, render_valor_por_moeda  # noqa: E402
 
 st.set_page_config(page_title="Cliente 360 — Vendas SAP", page_icon="🏥", layout="wide")
 st.title(":material/account_circle: Cliente 360")
@@ -108,10 +108,21 @@ else:
         st.subheader(nome_cliente)
 
         if not df_pedidos.empty:
+            # Achado 2026-09-04: Valor_* de fct_pendencia_sap vem na moeda do pedido
+            # (BRL/USD/UYU/COP/EUR), sem conversão — restringe a BRL antes de somar, pra não
+            # misturar moeda (mesmo achado/fix de pages/20_Pedidos.py e 27_Pendencia_x_Estoque.py).
+            df_pedidos_brl = df_pedidos[df_pedidos["Moeda"] == "BRL"]
+            n_pedidos_nao_brl = int((df_pedidos["Moeda"] != "BRL").sum())
             c1, c2, c3 = st.columns(3)
             c1.metric("Itens de pedido", f"{len(df_pedidos):,}")
-            c2.metric("Valor pendente de faturamento", f"R$ {df_pedidos['Valor_Pendente_Faturamento'].sum():,.2f}")
-            c3.metric("Valor faturado (histórico da consulta)", f"R$ {df_pedidos['Valor_Liquido_Faturado'].sum():,.2f}")
+            c2.metric("Valor pendente de faturamento (BRL)", f"R$ {df_pedidos_brl['Valor_Pendente_Faturamento'].sum():,.2f}")
+            c3.metric("Valor faturado (BRL, histórico da consulta)", f"R$ {df_pedidos_brl['Valor_Liquido_Faturado'].sum():,.2f}")
+            if n_pedidos_nao_brl:
+                st.caption(
+                    f":material/info: {n_pedidos_nao_brl:,} item(ns) deste cliente têm pedido em "
+                    "moeda diferente de BRL — não entram nos totais acima (sem tabela de câmbio "
+                    "pra converter), mas aparecem na tabela de detalhe abaixo com a coluna `Moeda`."
+                )
 
         df_credito = resultado["Crédito"]
         if not df_credito.empty:
@@ -137,7 +148,7 @@ else:
                     colunas = [
                         "Numero_Pedido", "Item_Pedido", "Data_Inclusao_Pedido", "Codigo_Produto",
                         "Descricao_Produto", "Nome_Centro", "Qtd_Pedida", "Qtd_Faturada",
-                        "Qtd_Pendente_Operacional", "Valor_Liquido_Pedido", "Valor_Liquido_Faturado",
+                        "Qtd_Pendente_Operacional", "Moeda", "Valor_Liquido_Pedido", "Valor_Liquido_Faturado",
                         "Valor_Pendente_Faturamento", "Status_Pendencia", "Status_Faturamento",
                     ]
                     st.dataframe(df_pedidos[colunas], width="stretch", hide_index=True)
@@ -164,14 +175,15 @@ else:
                 if df_opp_match.empty:
                     st.info("Nenhuma Oportunidade vinculada nos últimos 24 meses (cobertura de ~73% medida — ver docs).")
                 else:
-                    valor_oportunidade = df_opp_match.drop_duplicates(subset=["Nome_Oportunidade", "Data_Criacao_Oportunidade"])[
-                        "Valor_Oportunidade"
-                    ].sum()
-                    st.metric("Valor de Oportunidade (deduplicado)", f"R$ {valor_oportunidade:,.2f}")
+                    opp_dedup_cliente = df_opp_match.drop_duplicates(
+                        subset=["Nome_Oportunidade", "Data_Criacao_Oportunidade"]
+                    )
+                    st.caption("Valor de Oportunidade (deduplicado), por moeda:")
+                    render_valor_por_moeda(opp_dedup_cliente, "Valor_Oportunidade", moeda_col="Moeda_Oportunidade")
                     colunas_opp = [
                         "Numero_Pedido", "Item_Pedido", "Codigo_Produto", "Descricao_Produto",
                         "Nome_Oportunidade", "Estagio_Oportunidade", "Oportunidade_Ganha",
-                        "Valor_Oportunidade", "Valor_Item_Oportunidade", "Status_Pendencia",
+                        "Moeda_Oportunidade", "Valor_Oportunidade", "Valor_Item_Oportunidade", "Status_Pendencia",
                     ]
                     st.dataframe(df_opp_match[colunas_opp], width="stretch", hide_index=True)
 

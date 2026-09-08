@@ -25,7 +25,7 @@ from scripts.query_vendas_sap import (  # noqa: E402
     faturamento_vendedor_mensal,
     top_clientes_por_vendedor,
 )
-from scripts.ui_theme import card, render_filtro_periodo_tipo_cliente  # noqa: E402
+from scripts.ui_theme import card, render_filtro_periodo_tipo_cliente, render_valor_por_moeda  # noqa: E402
 
 st.set_page_config(page_title="Visão do Vendedor — Vendas SAP", page_icon="🧑‍💼", layout="wide")
 st.title(":material/badge: Visão do Vendedor")
@@ -64,16 +64,23 @@ df = _por_vendedor_cached(data_inicio, data_fim, tipo_cliente)
 if df.empty:
     st.info("Nada encontrado para esse período/filtro.")
 else:
-    valor_total = df["Valor_Faturado"].sum()
-    df_sem_vendedor = df[df["Codigo_Vendedor"] == "SEM_VENDEDOR"]
+    # Achado 2026-09-04: Valor_Faturado vem por Moeda (1 linha por Vendedor+Moeda) — nunca
+    # somar entre moedas. Ranking/gráfico abaixo restritos a BRL (a esmagadora maioria dos
+    # vendedores cadastrados é doméstica); moeda estrangeira aparece separada no resumo.
+    st.caption("Faturado no período, por moeda:")
+    render_valor_por_moeda(df, "Valor_Faturado")
+
+    df_brl = df[df["Moeda"] == "BRL"]
+    valor_total = df_brl["Valor_Faturado"].sum()
+    df_sem_vendedor = df_brl[df_brl["Codigo_Vendedor"] == "SEM_VENDEDOR"]
     valor_sem_vendedor = df_sem_vendedor["Valor_Faturado"].sum() if not df_sem_vendedor.empty else 0.0
     pct_sem_vendedor = (valor_sem_vendedor / valor_total) if valor_total else 0.0
-    df_identificados = df[df["Codigo_Vendedor"] != "SEM_VENDEDOR"].sort_values(
+    df_identificados = df_brl[df_brl["Codigo_Vendedor"] != "SEM_VENDEDOR"].sort_values(
         "Valor_Faturado", ascending=False
     )
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Faturado no período", f"R$ {valor_total:,.0f}")
+    c1.metric("Faturado no período (BRL)", f"R$ {valor_total:,.0f}")
     c2.metric("Vendedores identificados", f"{len(df_identificados):,}")
     c3.metric(
         "Top vendedor",
@@ -103,7 +110,7 @@ else:
 
     st.divider()
 
-    st.subheader("Ranking de vendedores")
+    st.subheader("Ranking de vendedores (BRL)")
     top_n = st.slider("Quantos vendedores mostrar", min_value=5, max_value=50, value=20, step=5)
     top_vendedores = df_identificados.head(top_n)
     with card("vendedor-ranking"):
@@ -152,16 +159,22 @@ else:
             st.info("Sem faturamento nesse vendedor na janela selecionada.")
         else:
             with card("vendedor-tendencia"):
-                st.bar_chart(df_tendencia.set_index("Mes")["Valor_Faturado"])
+                pivot_tendencia = df_tendencia.pivot_table(
+                    index="Mes", columns="Moeda", values="Valor_Faturado", aggfunc="sum", fill_value=0
+                )
+                st.bar_chart(pivot_tendencia)
 
-        st.caption(f"Top clientes de **{nome_selecionado}** no período do filtro global.")
+        st.caption(
+            f"Top clientes de **{nome_selecionado}** no período do filtro global — coluna "
+            "`Moeda` ao lado do valor (não somar entre linhas de moeda diferente)."
+        )
         if df_top_clientes.empty:
             st.info("Sem faturamento desse vendedor no período do filtro global.")
         else:
             with card("vendedor-top-clientes"):
                 st.dataframe(
                     df_top_clientes.style.format(
-                        {"Valor_Faturado": "R$ {:,.2f}", "Qtd_Faturada": "{:,.0f}"}
+                        {"Valor_Faturado": "{:,.2f}", "Qtd_Faturada": "{:,.0f}"}
                     ),
                     width="stretch",
                     hide_index=True,

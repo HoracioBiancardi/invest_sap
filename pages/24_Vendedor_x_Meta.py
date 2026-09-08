@@ -20,7 +20,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.query_vendas_sap import faturamento_vendedor_com_meta_bu  # noqa: E402
-from scripts.ui_theme import card, render_filtro_periodo_tipo_cliente  # noqa: E402
+from scripts.ui_theme import card, render_filtro_periodo_tipo_cliente, render_valor_por_moeda  # noqa: E402
 
 st.set_page_config(page_title="Vendedor x Meta — Vendas SAP", page_icon="🎯", layout="wide")
 st.title(":material/track_changes: Vendedor x Meta x Faturamento")
@@ -56,13 +56,19 @@ df = _dados_cached(data_inicio, data_fim, tipo_cliente)
 if df.empty:
     st.info("Nada encontrado para esse período/filtro.")
 else:
-    df_identificados = df[df["Codigo_Vendedor"] != "SEM_VENDEDOR"].sort_values("Valor_Faturado", ascending=False)
+    # Achado 2026-09-04: Valor_Faturado vem por Moeda; Meta_Valor_BU/Valor_Realizado_BU são
+    # sempre BRL (ver meta_vs_realizado_mensal) — comparação com meta só faz sentido em BRL.
+    st.caption("Faturado no período, por moeda:")
+    render_valor_por_moeda(df, "Valor_Faturado")
+
+    df_brl = df[df["Moeda"] == "BRL"]
+    df_identificados = df_brl[df_brl["Codigo_Vendedor"] != "SEM_VENDEDOR"].sort_values("Valor_Faturado", ascending=False)
     df_com_bu = df_identificados[df_identificados["BU"] != "NAO ALOCADO"]
     pct_com_bu = (len(df_com_bu) / len(df_identificados)) if len(df_identificados) else 0.0
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Vendedores identificados", f"{len(df_identificados):,}")
-    c2.metric("Faturado no período", f"R$ {df_identificados['Valor_Faturado'].sum():,.0f}")
+    c1.metric("Vendedores identificados (BRL)", f"{len(df_identificados):,}")
+    c2.metric("Faturado no período (BRL)", f"R$ {df_identificados['Valor_Faturado'].sum():,.0f}")
     c3.metric("% de vendedores com BU cadastrada", f"{pct_com_bu:.0%}")
 
     st.divider()

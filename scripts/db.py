@@ -23,6 +23,7 @@ import pandas as pd
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError
 
 load_dotenv()
 
@@ -32,6 +33,15 @@ VALID_DATABASES = {"BRONZE", "SILVER", "GOLD"}
 
 # Schema GOLD onde vivem os modelos de vendas via SAP (ver CONTEXTO_VENDAS_SAP.md).
 GOLD_VENDAS_SAP_SCHEMA = "vendas_sap"
+
+
+class DatabaseConnectionError(RuntimeError):
+    """Falha ao conectar numa fonte de dados (SQL Server ou SAP HANA).
+
+    Levantada no lugar do erro cru do driver (pyodbc/hdbcli) para que as páginas do
+    dashboard possam mostrar uma mensagem amigável em vez do traceback padrão do
+    Streamlit. A mensagem já vem pronta para exibição (`st.error(str(exc))`).
+    """
 
 
 def _require_env(name: str) -> str:
@@ -86,8 +96,15 @@ def read_sql(
         params: dict de parâmetros nomeados para bind (opcional).
     """
     engine = get_sqlserver_engine(database)
-    with engine.connect() as conn:
-        return pd.read_sql(text(query), conn, params=params)
+    try:
+        with engine.connect() as conn:
+            return pd.read_sql(text(query), conn, params=params)
+    except OperationalError as exc:
+        raise DatabaseConnectionError(
+            f"Não foi possível conectar ao SQL Server ({database}). "
+            "Verifique se você está na rede/VPN da empresa e se o servidor está disponível, "
+            "e tente novamente em instantes."
+        ) from exc
 
 
 def get_hana_config(schema: Optional[str] = None) -> dict[str, Any]:
@@ -123,7 +140,14 @@ def get_hana_connection(schema: Optional[str] = None):
     from hdbcli import dbapi
 
     config = get_hana_config(schema)
-    return dbapi.connect(**config)
+    try:
+        return dbapi.connect(**config)
+    except dbapi.Error as exc:
+        raise DatabaseConnectionError(
+            "Não foi possível conectar ao SAP HANA/Datasphere. "
+            "Verifique se você está na rede/VPN da empresa e se o servidor está disponível, "
+            "e tente novamente em instantes."
+        ) from exc
 
 
 def read_hana_sql(

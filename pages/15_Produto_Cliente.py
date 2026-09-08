@@ -23,7 +23,7 @@ from scripts.query_faturamento_comercial import (  # noqa: E402
     skus_ativos_periodo,
 )
 from scripts.ui_filtros_comercial import render_filtros_comercial  # noqa: E402
-from scripts.ui_theme import card, render_filtro_tipo_cliente  # noqa: E402
+from scripts.ui_theme import card, render_filtro_tipo_cliente, render_valor_por_moeda  # noqa: E402
 
 st.set_page_config(page_title="Produto | Cliente — Vendas Comercial", page_icon="🧪", layout="wide")
 st.title(":material/category: Visão Produto | Cliente")
@@ -82,12 +82,19 @@ def _dimensao_mes_cached(
 df_mes = _serie_mes_cached(data_inicio, hoje, filtros)
 df_skus = _skus_cached(data_inicio, hoje, filtros)
 
-media_mensal = df_mes["Valor_Faturado"].mean() if not df_mes.empty else 0.0
+# Achado 2026-09-04: Valor_Faturado vem por Moeda — "preço médio"/rankings/médias abaixo só
+# fazem sentido dentro de 1 moeda por vez; restrito a BRL, com quebra por moeda no topo.
+df_mes_brl = df_mes[df_mes["Moeda"] == "BRL"] if not df_mes.empty else df_mes
+if not df_mes.empty and (df_mes["Moeda"] != "BRL").any():
+    st.caption("Faturamento no período, por moeda (métricas abaixo usam só BRL):")
+    render_valor_por_moeda(df_mes, "Valor_Faturado")
+
+media_mensal = df_mes_brl["Valor_Faturado"].mean() if not df_mes_brl.empty else 0.0
 media_skus = df_skus["Qtd_SKUs_Vendidos"].mean() if not df_skus.empty else 0.0
 media_clientes = df_skus["Qtd_Clientes_Atendidos"].mean() if not df_skus.empty else 0.0
 
 c1, c2, c3 = st.columns(3)
-c1.metric("Média Vendas/mês", f"R$ {media_mensal:,.0f}")
+c1.metric("Média Vendas/mês (BRL)", f"R$ {media_mensal:,.0f}")
 c2.metric("Média SKUs vendidos/mês", f"{media_skus:,.0f}")
 c3.metric("Média clientes atendidos/mês", f"{media_clientes:,.0f}")
 
@@ -96,11 +103,11 @@ st.divider()
 with card("produto-cliente-evolucao"):
     col_a, col_b = st.columns([2, 1])
     with col_a:
-        st.subheader("Faturamento Bruto e Preço Médio por mês")
-        if df_mes.empty:
+        st.subheader("Faturamento Bruto e Preço Médio por mês (BRL)")
+        if df_mes_brl.empty:
             st.info("Sem dado no período.")
         else:
-            df_preco = df_mes.assign(
+            df_preco = df_mes_brl.assign(
                 Preco_Medio=lambda d: d["Valor_Faturado"] / d["Qtd_Faturada"].replace(0, pd.NA)
             )
             st.bar_chart(df_preco.set_index("Mes")["Valor_Faturado"])
@@ -114,9 +121,15 @@ with card("produto-cliente-evolucao"):
 
 st.divider()
 
-st.subheader("Ranking mensal")
+st.subheader("Ranking mensal (BRL)")
+st.caption("Restrito a `Moeda='BRL'` (achado 2026-09-04) — pivot/média por dimensão não mistura moeda.")
 dimensao_opcao = st.radio("Quebrar por", options=["Cliente", "Família", "Produto"], horizontal=True)
-df_dim_mes = _dimensao_mes_cached(dimensao_opcao, data_inicio, hoje, tipo_cliente, filtros)
+df_dim_mes_todas_moedas = _dimensao_mes_cached(dimensao_opcao, data_inicio, hoje, tipo_cliente, filtros)
+df_dim_mes = (
+    df_dim_mes_todas_moedas[df_dim_mes_todas_moedas["Moeda"] == "BRL"]
+    if not df_dim_mes_todas_moedas.empty
+    else df_dim_mes_todas_moedas
+)
 
 if df_dim_mes.empty:
     st.info("Nada encontrado para essa combinação de filtro.")

@@ -8,10 +8,13 @@ Conteúdo de cada página está em pages/*.py; este arquivo define a estrutura d
 antes das seções colapsáveis —, seguida de 3 seções: Executivo, Faturamento (Painel Vendas)
 e Técnico — ver docs/COMO_RODAR.md §9).
 
-**Executivo** reúne as 12 visões de portfólio (Pendência x Estoque, Oportunidade, Pedidos,
-Remessas, Faturamento, Faturamento x Meta, Estoque, Material, Cliente 360,
-Crédito e Devoluções, Vendedor, Vendedor x Meta x Faturamento) — todas sobre o total bruto
-de `vendas_sap`. **Faturamento (Painel Vendas)**
+As 12 visões de portfólio sobre o total bruto de `vendas_sap` (antes só "Executivo", 1 seção
+só, ordem sem critério) foram divididas em 3 seções seguindo o fluxo real de venda —
+reordenar/reagrupar por pedido do usuário (2026-09-05), sem mudar nenhuma página em si:
+**Funil de Vendas** segue a ordem cronológica do pedido (Oportunidade → Pedido → Pendência/
+Estoque → Remessa → Faturamento → Crédito e Devoluções, esse último pós-fatura); **Metas e
+Performance** é acompanhamento (Faturamento x Meta, Vendedor, Vendedor x Meta x Faturamento);
+**Cadastros** é consulta pontual de dimensão (Cliente 360, Material). **Faturamento (Painel Vendas)**
 passa pelas mesmas tabelas fonte só que via o crosswalk comercial cliente→setor
 (`scripts/query_faturamento_comercial.py`, ~52% de cobertura) — ver
 docs/CONTEXTO_VENDAS_SAP.md §10 — não é só organização visual, são *consultas* diferentes
@@ -33,6 +36,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from scripts.db import DatabaseConnectionError
 from scripts.ui_theme import apply_custom_theme
 
 apply_custom_theme()
@@ -42,12 +46,7 @@ pg = st.navigation(
         "": [
             st.Page("pages/0_Home.py", title="Home", icon=":material/dashboard:", default=True),
         ],
-        "Executivo": [
-            st.Page(
-                "pages/27_Pendencia_x_Estoque.py",
-                title="Pendência x Estoque",
-                icon=":material/pending_actions:",
-            ),
+        "Funil de Vendas": [
             st.Page(
                 "pages/19_Oportunidade.py", title="Oportunidade", icon=":material/target:"
             ),
@@ -55,27 +54,28 @@ pg = st.navigation(
                 "pages/20_Pedidos.py", title="Pedidos", icon=":material/receipt_long:"
             ),
             st.Page(
+                "pages/27_Pendencia_x_Estoque.py",
+                title="Pendência x Estoque",
+                icon=":material/pending_actions:",
+            ),
+            st.Page("pages/6_Estoque.py", title="Estoque", icon=":material/inventory_2:"),
+            st.Page(
                 "pages/21_Remessas.py", title="Remessas", icon=":material/local_shipping:"
             ),
             st.Page(
                 "pages/22_Faturamento.py", title="Faturamento", icon=":material/payments:"
             ),
             st.Page(
-                "pages/11_Metas.py",
-                title="Faturamento x Meta",
-                icon=":material/track_changes:",
-            ),
-            st.Page("pages/6_Estoque.py", title="Estoque", icon=":material/inventory_2:"),
-            st.Page(
-                "pages/23_Material.py", title="Material", icon=":material/inventory:"
-            ),
-            st.Page(
-                "pages/25_Cliente_360.py", title="Cliente 360", icon=":material/account_circle:"
-            ),
-            st.Page(
                 "pages/7_Credito_Devolucoes.py",
                 title="Crédito e Devoluções",
                 icon=":material/credit_card:",
+            ),
+        ],
+        "Metas e Performance": [
+            st.Page(
+                "pages/11_Metas.py",
+                title="Faturamento x Meta",
+                icon=":material/track_changes:",
             ),
             st.Page(
                 "pages/18_Visao_Vendedor.py",
@@ -86,6 +86,14 @@ pg = st.navigation(
                 "pages/24_Vendedor_x_Meta.py",
                 title="Vendedor x Meta x Faturamento",
                 icon=":material/leaderboard:",
+            ),
+        ],
+        "Cadastros": [
+            st.Page(
+                "pages/25_Cliente_360.py", title="Cliente 360", icon=":material/account_circle:"
+            ),
+            st.Page(
+                "pages/23_Material.py", title="Material", icon=":material/inventory:"
             ),
         ],
         "Faturamento (Painel Vendas)": [
@@ -110,4 +118,7 @@ pg = st.navigation(
         ],
     }
 )
-pg.run()
+try:
+    pg.run()
+except DatabaseConnectionError as exc:
+    st.error(str(exc), icon="🔌")

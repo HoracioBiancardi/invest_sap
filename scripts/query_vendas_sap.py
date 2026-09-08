@@ -20,11 +20,116 @@ from typing import Optional
 import pandas as pd
 
 try:
-    from scripts.db import read_sql
+    from scripts.db import read_hana_sql, read_sql
 except ImportError:
-    from db import read_sql
+    from db import read_hana_sql, read_sql
 
 SCHEMA = "vendas_sap"
+
+# Moedas estrangeiras com taxa de câmbio real e usável em TCURR (ver `taxas_cambio_brl`) —
+# CLP fica de fora de propósito: só tem 1 linha em TODO TCURR (placeholder de 2001, sem
+# taxa real), então nunca dá pra converter (achado 2026-09-04, 8 faturas em CLP, imaterial).
+MOEDAS_CAMBIO_DISPONIVEL = ("USD", "COP", "UYU")
+
+
+def taxas_cambio_brl(moedas: tuple[str, ...] = MOEDAS_CAMBIO_DISPONIVEL) -> pd.DataFrame:
+    """Série histórica de taxa de câmbio -> BRL, direto do SAP HANA (`TCURR`, tipo 'M' =
+    taxa média, o padrão do SAP pra conversão geral).
+
+    Achado 2026-09-04 (verificação p/ jurídico): existe taxa de câmbio REAL nesta base,
+    só não estava ligada a nenhuma consulta do projeto — todo o resto deste módulo até
+    aqui mostrava moeda estrangeira separada em vez de converter (ver `_moeda_pedido_join_sql`).
+    `GDATU` (data de início de validade) vem armazenado invertido (`99999999 - AAAAMMDD`,
+    convenção SAP pra permitir busca "taxa válida em ou antes desta data" com índice
+    ascendente) — decodificado aqui pra data normal.
+
+    Cobertura real medida ao vivo: USD e UYU têm taxa "limpa" (`UKURS`/`FFACT`/`TFACT` > 0)
+    só a partir de 2018-03-03 (antes disso só existem linhas de placeholder com fator
+    zerado) — pedido em moeda estrangeira anterior a essa data (achado: 26,6% do valor
+    faturado em USD, 1,6% do valor em UYU) não tem taxa exata; `converter_para_brl` usa a
+    taxa disponível mais próxima nesse caso (nunca deixa de converter, mas fica menos
+    preciso pra pedido muito antigo). COP só existe faturado a partir de 2025-07, dentro
+    da cobertura de taxa (desde 2025-07-02) — sem gap relevante.
+
+    Returns:
+        DataFrame com `Moeda`, `Data` (date), `Taxa_BRL` (multiplicar valor na moeda
+        original por isso pra obter o equivalente em BRL) — 1 linha por moeda+dia com
+        cotação publicada (não é todo dia corrido, fim de semana/feriado não tem linha
+        nova; ver `converter_para_brl` pra como isso é tratado no merge).
+    """
+    placeholders = ",".join(["?"] * len(moedas))
+    query = f"""
+        SELECT
+            FCURR AS Moeda,
+            99999999 - CAST(GDATU AS INT) AS Data_Int,
+            UKURS * TFACT / FFACT AS Taxa_BRL
+        FROM TCURR
+        WHERE TCURR = 'BRL' AND KURST = 'M'
+            AND UKURS > 0 AND FFACT > 0 AND TFACT > 0
+            AND FCURR IN ({placeholders})
+        ORDER BY FCURR, Data_Int
+    """  # nosec B608 (moedas vêm de uma tupla fixa do código, não input externo)
+    df = read_hana_sql(query, params=tuple(moedas))
+    # HANA devolve identificador não citado em maiúsculas (MOEDA/DATA_INT/TAXA_BRL), não o
+    # nome do alias como escrito na query — renomeia por posição em vez de por nome.
+    df.columns = ["Moeda", "Data_Int", "Taxa_BRL"]
+    df["Data"] = pd.to_datetime(df["Data_Int"], format="%Y%m%d")
+    return df.drop(columns=["Data_Int"])
+
+
+def converter_para_brl(
+    df: pd.DataFrame,
+    valor_col: str,
+    moeda_col: str = "Moeda",
+    data_col: str = "Data",
+    taxas: Optional[pd.DataFrame] = None,
+) -> pd.Series:
+    """Converte uma coluna de valor (em `moeda_col`, na data de `data_col`) pra BRL.
+
+    Linha `Moeda='BRL'` passa direto (taxa 1). Linha em moeda sem cobertura de taxa (ex.:
+    CLP, ver `MOEDAS_CAMBIO_DISPONIVEL`) volta como `NaN` — quem chamar deve tratar
+    separadamente (ex.: somar à parte, avisar que não converteu), nunca tratar `NaN` como 0.
+
+    Usa `pd.merge_asof(..., direction="nearest")` por moeda — pega a cotação do dia exato
+    se existir, senão a mais próxima (antes OU depois, ver achado de gap de cobertura em
+    `taxas_cambio_brl`) — nunca deixa de converter por falta de cotação exata num fim de
+    semana/feriado ou num pedido muito antigo (2014-2018 pra USD/UYU), só fica menos
+    preciso nesses casos.
+
+    Args:
+        df: precisa ter `moeda_col` e `data_col` (convertível pra datetime); `valor_col`
+            é a coluna a converter, na moeda original de cada linha.
+        taxas: `taxas_cambio_brl()` já carregada, pra reusar entre chamadas (evita re-ir
+            no HANA toda vez) — se None, busca aqui.
+    """
+    if taxas is None:
+        taxas = taxas_cambio_brl()
+
+    df_work = df[[moeda_col, data_col, valor_col]].copy()
+    # dtype de Data pode divergir (datetime64[s] de uma coluna DATE do SQL Server vs
+    # datetime64[us]/[ns] de pd.to_datetime aqui) — normaliza os dois lados pro mesmo
+    # dtype, senão merge_asof recusa o merge.
+    df_work["_data"] = pd.to_datetime(df_work[data_col]).astype("datetime64[ns]")
+    df_work["_idx"] = df_work.index
+
+    resultado = pd.Series(index=df.index, dtype="float64")
+    resultado[df_work[moeda_col] == "BRL"] = df_work.loc[df_work[moeda_col] == "BRL", valor_col]
+
+    for moeda in df_work[moeda_col].unique():
+        if moeda == "BRL":
+            continue
+        taxa_moeda = taxas[taxas["Moeda"] == moeda].sort_values("Data")
+        if taxa_moeda.empty:
+            continue  # sem cobertura (ex.: CLP) — fica NaN de propósito.
+        taxa_moeda = taxa_moeda.assign(Data=taxa_moeda["Data"].astype("datetime64[ns]"))
+        linhas_moeda = df_work[df_work[moeda_col] == moeda].sort_values("_data")
+        merged = pd.merge_asof(
+            linhas_moeda, taxa_moeda[["Data", "Taxa_BRL"]], left_on="_data", right_on="Data", direction="nearest"
+        )
+        convertido = merged[valor_col].to_numpy() * merged["Taxa_BRL"].to_numpy()
+        resultado.loc[merged["_idx"].to_numpy()] = convertido
+
+    return resultado
 
 # Canais de distribuição classificados como "Governo" em dim_cliente_sap.Descricao_Canal_Distribuicao
 # — reusado em todo filtro Governo x Privado deste módulo (funil, faturamento, pendências, crédito).
@@ -83,14 +188,41 @@ def _filtro_periodo_tipo_cliente(
     return join_sql, where_extra
 
 
+def _moeda_pedido_join_sql(alias_pendencia: str = "p") -> str:
+    """JOIN pra trazer a moeda do documento de venda original pra uma query de fct_pendencia_sap.
+
+    ACHADO GRAVE (2026-09-04, verificação p/ jurídico): `fct_pendencia_sap.Valor_Pendente_
+    Faturamento` vem na moeda do pedido original (`fct_vendas_itens_sap.Moeda` —
+    BRL/USD/UYU/COP/EUR nesta base), sem conversão, e nenhuma consulta deste módulo filtrava
+    isso antes de somar — o "R$" da tela de Pedidos/Pendência x Estoque era na verdade a soma
+    bruta de 5 moedas (ex.: backlog total reportado como R$505,9mi; real em BRL R$94,3mi).
+    Não confundir com `MOEDA_POR_PAIS_CENTRO`/`_moeda_case_sql` (usado só pra estoque,
+    `fct_estoque_lote_sap`, onde a moeda segue o país do centro/BWKEY): pedido de exportação
+    pode ser faturado em USD a partir de um centro brasileiro, então aqui a moeda tem que vir
+    do documento de venda, não do centro. Sem tabela de câmbio (TCURR) replicada nesta base
+    pra converter de verdade — todo total em R$ deve filtrar `Moeda = 'BRL'`; quantidade
+    (`Qtd_*`) não é afetada e pode somar todas as moedas.
+    """
+    return f"""
+        LEFT JOIN {SCHEMA}.fct_vendas_itens_sap fvi
+            ON {alias_pendencia}.Numero_Pedido = fvi.Numero_Pedido
+            AND {alias_pendencia}.Item_Pedido = fvi.Item_Pedido
+    """
+
+
 def pendencias_abertas(limit: Optional[int] = None) -> pd.DataFrame:
-    """Todo o backlog aberto (Flag_Pendencia = 1) de fct_pendencia_sap."""
+    """Todo o backlog aberto (Flag_Pendencia = 1) de fct_pendencia_sap, com a Moeda do pedido.
+
+    Traz `Moeda` (ver `_moeda_pedido_join_sql`) pra quem consumir poder filtrar `Moeda='BRL'`
+    antes de somar `Valor_Pendente_Faturamento` — nunca somar essa coluna sem filtrar moeda.
+    """
     top = f"TOP {int(limit)} " if limit else ""
     query = f"""
-        SELECT {top}*
-        FROM {SCHEMA}.fct_pendencia_sap
-        WHERE Flag_Pendencia = 1
-        ORDER BY Dias_Desde_Inclusao_Pedido DESC
+        SELECT {top}p.*, fvi.Moeda
+        FROM {SCHEMA}.fct_pendencia_sap p
+        {_moeda_pedido_join_sql()}
+        WHERE p.Flag_Pendencia = 1
+        ORDER BY p.Dias_Desde_Inclusao_Pedido DESC
     """  # nosec B608
     return read_sql(query, database="GOLD")
 
@@ -101,6 +233,10 @@ def aging_pendencias(
     tipo_cliente: Optional[str] = None,
 ) -> pd.DataFrame:
     """Backlog aberto agrupado em faixas de aging (dias desde a inclusão do pedido).
+
+    `Valor_Pendente_Total` soma só pedidos `Moeda='BRL'` (ver `_moeda_pedido_join_sql`) —
+    backlog em outra moeda existe mas não entra nesse total em R$, pra não misturar moeda.
+    `Qtd_Pendente_Total` não é afetado, soma todas as moedas.
 
     Args:
         data_inicio, data_fim: se ambos informados, restringe a pedidos incluídos nesse período.
@@ -121,8 +257,9 @@ def aging_pendencias(
             END AS Faixa_Aging,
             COUNT(*) AS Qtd_Itens,
             SUM(p.Qtd_Pendente_Operacional) AS Qtd_Pendente_Total,
-            SUM(p.Valor_Pendente_Faturamento) AS Valor_Pendente_Total
+            SUM(CASE WHEN fvi.Moeda = 'BRL' THEN p.Valor_Pendente_Faturamento ELSE 0 END) AS Valor_Pendente_Total
         FROM {SCHEMA}.fct_pendencia_sap p
+        {_moeda_pedido_join_sql()}
         {join_sql}
         WHERE p.Flag_Pendencia = 1{where_extra}
         GROUP BY
@@ -142,7 +279,11 @@ def pendencia_status_estoque(
     data_fim: Optional[date] = None,
     tipo_cliente: Optional[str] = None,
 ) -> pd.DataFrame:
-    """Distribuição do backlog por cobertura de estoque (Status_Pendencia_Estoque)."""
+    """Distribuição do backlog por cobertura de estoque (Status_Pendencia_Estoque).
+
+    `Valor_Pendente_Total` soma só `Moeda='BRL'` (ver `_moeda_pedido_join_sql`) — não mistura
+    moeda; `Qtd_Pendente_Total` soma todas as moedas.
+    """
     params: dict[str, object] = {}
     join_sql, where_extra = _filtro_periodo_tipo_cliente(
         data_inicio, data_fim, tipo_cliente, params
@@ -152,8 +293,9 @@ def pendencia_status_estoque(
             p.Status_Pendencia_Estoque,
             COUNT(*) AS Qtd_Itens,
             SUM(p.Qtd_Pendente_Operacional) AS Qtd_Pendente_Total,
-            SUM(p.Valor_Pendente_Faturamento) AS Valor_Pendente_Total
+            SUM(CASE WHEN fvi.Moeda = 'BRL' THEN p.Valor_Pendente_Faturamento ELSE 0 END) AS Valor_Pendente_Total
         FROM {SCHEMA}.fct_pendencia_sap p
+        {_moeda_pedido_join_sql()}
         {join_sql}
         WHERE p.Flag_Pendencia = 1{where_extra}
         GROUP BY p.Status_Pendencia_Estoque
@@ -168,7 +310,12 @@ def top_clientes_pendentes(
     data_fim: Optional[date] = None,
     tipo_cliente: Optional[str] = None,
 ) -> pd.DataFrame:
-    """Top N clientes por valor financeiro pendente de faturamento."""
+    """Top N clientes por valor financeiro pendente de faturamento.
+
+    `Valor_Pendente_Total` soma só `Moeda='BRL'` (ver `_moeda_pedido_join_sql`) — cliente com
+    backlog só em moeda estrangeira pode não aparecer/ficar subestimado neste ranking em R$;
+    `Qtd_Pendente_Total` soma todas as moedas.
+    """
     params: dict[str, object] = {}
     join_sql, where_extra = _filtro_periodo_tipo_cliente(
         data_inicio, data_fim, tipo_cliente, params
@@ -179,8 +326,9 @@ def top_clientes_pendentes(
             p.Nome_Cliente,
             COUNT(*) AS Qtd_Itens_Pendentes,
             SUM(p.Qtd_Pendente_Operacional) AS Qtd_Pendente_Total,
-            SUM(p.Valor_Pendente_Faturamento) AS Valor_Pendente_Total
+            SUM(CASE WHEN fvi.Moeda = 'BRL' THEN p.Valor_Pendente_Faturamento ELSE 0 END) AS Valor_Pendente_Total
         FROM {SCHEMA}.fct_pendencia_sap p
+        {_moeda_pedido_join_sql()}
         {join_sql}
         WHERE p.Flag_Pendencia = 1{where_extra}
         GROUP BY p.Codigo_Cliente, p.Nome_Cliente
@@ -283,6 +431,12 @@ def pendencia_x_estoque_global() -> pd.DataFrame:
     `fct_pendencia_sap.sql` (repo `data-platform`), não aqui. Mitigação nesta função:
     traz `Flag_Totalmente_Faturado` pra quem consumir poder filtrar.
 
+    **Achado GRAVE 2 (2026-09-04, verificação p/ jurídico)**: `Valor_Pendente_Faturamento`
+    vem na moeda do pedido original (ver `_moeda_pedido_join_sql`), sem conversão — soma sem
+    filtrar `Moeda='BRL'` mistura BRL/USD/UYU/COP/EUR. Ao contrário do achado acima, este
+    afeta sim os KPIs em R$ desta função (o achado anterior só falava dos itens já faturados,
+    que ficam com valor zerado). Traz `Moeda` pra quem consumir poder filtrar.
+
     Sem parâmetros de propósito (evita o formato de risco documentado — filtro
     parametrizado + CTE/GROUP BY — do bug de plan cache do SQL Server); filtrar o
     resultado em pandas depois de trazer.
@@ -308,6 +462,7 @@ def pendencia_x_estoque_global() -> pd.DataFrame:
             p.Primeira_Data_Remessa, p.Ultima_Data_Remessa,
             p.Primeira_Data_Faturamento, p.Ultima_Data_Faturamento,
             p.Qtd_Pendente_Remessa, p.Qtd_Pendente_Operacional, p.Valor_Pendente_Faturamento,
+            fvi.Moeda,
             p.Status_Pendencia, p.Status_Pendencia_Estoque, p.Flag_Totalmente_Faturado,
             s.Posicao_Fila_Prioridade, s.Qtd_Estoque_Disponivel_Planta,
             s.Qtd_Estoque_Saldo_Virtual_Restante, s.Status_Alocacao_Virtual,
@@ -315,6 +470,7 @@ def pendencia_x_estoque_global() -> pd.DataFrame:
         FROM {SCHEMA}.fct_pendencia_sap p
         INNER JOIN {SCHEMA}.fct_pendencia_status_sap s
             ON p.Numero_Pedido = s.Numero_Pedido AND p.Item_Pedido = s.Item_Pedido
+        {_moeda_pedido_join_sql()}
         LEFT JOIN credito_cliente cr
             ON p.Codigo_Cliente = cr.Codigo_Cliente
         WHERE p.Flag_Pendencia = 1
@@ -337,6 +493,83 @@ def organizacoes_vendas_texto() -> pd.DataFrame:
         WHERE spras = 'P'
     """  # nosec B608
     return read_sql(query, database="SILVER")
+
+
+# Nome contém "BLAU" — filial/subsidiária do próprio grupo usada em transferência
+# intercompany de estoque (STO), não cliente comercial externo (ex.: `BLAU FARMACEUTICA
+# COLOMBIA SAS`, `BLAU FARMACEUTICA FILIAL SP`, `BLAUFARMA URUGUAY S.A.`, `BLAU LOG`).
+# Achado 2026-09-06 (ver página Pendência x Estoque): não existe flag nativo de
+# intercompany em `dim_cliente_sap` (CNPJ raiz varia entre as filiais, algumas
+# estrangeiras nem têm CNPJ) — heurística por nome (mesmo padrão de `CLIENTE_MS_LIKE`
+# em `query_faturamento_comercial.py`), testada contra os 15 clientes reais do backlog
+# atual sem falso positivo. Importa porque esses 15 "clientes" concentram 64% da
+# quantidade do backlog real (`Flag_Pendencia=1 AND Flag_Totalmente_Faturado=0`) e nunca
+# vão ter `Linha_Negocio` (`dim_estrutura` mapeia segmento de cliente final, não
+# movimentação interna) — sem excluir, o NAO ALOCADO por quantidade fica em ~98%, bem
+# diferente do Painel Vendas de referência (que já exclui essas transferências).
+CLIENTE_INTERCOMPANY_LIKE = "BLAU"
+
+
+def linha_negocio_por_cliente() -> pd.DataFrame:
+    """Camadas MANUAL (por `chave_org_vda_cli` — cliente+Organização de Vendas) e
+    HEURISTICA_PRODUTO (por `Codigo_Cliente` só, não depende de Org) de Linha de Negócio,
+    como 2 lookups empilhados (`UNION ALL`, não pré-combinados — ver "Como consumir"
+    abaixo) pra reuso em telas que precisam da Linha de Negócio item a item (ex.:
+    Pendência x Estoque). Mesma lógica de 2 camadas de
+    `faturamento_por_org_vendas_linha_negocio` (ver lá pros números de cobertura/precisão
+    — ~52-54% manual, ~87% com a heurística por produto).
+
+    1. Manual: `Codigo_Cliente+Codigo_Org_Vendas` (`chave_org_vda_cli`) ->
+       `vendas.dim_cliente_setor` -> `vendas.dim_estrutura.org_vendas`. Casado por Org
+       desde o fix de 2026-09-06 (ver `_chave_org_vda_cli_sql`) — antes ignorava a Org e
+       podia aplicar o rótulo errado quando o cliente vende por mais de 1 Org com setor
+       distinto (achado: 14,1% do faturamento de 12 meses tinha Linha de Negócio errada).
+    2. Heurística por produto dominante (só quem não tem match manual) — não depende de
+       Org, então fica no grão de cliente mesmo.
+
+    Retorna 1 linha por combinação com alguma alocação, `Origem_Linha_Negocio` distingue
+    a camada:
+        `MANUAL`: `chave_org_vda_cli` preenchido, `Codigo_Cliente` NULL.
+        `HEURISTICA_PRODUTO`: `Codigo_Cliente` (BIGINT, sem zero à esquerda) preenchido,
+            `chave_org_vda_cli` NULL.
+
+    Como consumir (2 merges, não 1 — os grãos são diferentes): construa
+    `chave_org_vda_cli_pandas(Codigo_Cliente, Codigo_Org_Vendas)` no seu DataFrame e faça
+    merge com as linhas `MANUAL` por essa chave primeiro; pras linhas que sobrarem sem
+    match, faça um 2º merge com as linhas `HEURISTICA_PRODUTO` por `Codigo_Cliente`
+    (`pd.to_numeric`, sem zero à esquerda); o que sobrar depois dos 2 é 'NAO ALOCADO'. Ver
+    `pages/27_Pendencia_x_Estoque.py` pro padrão completo.
+    """
+    query = f"""
+        WITH{_cte_linha_manual_sql()},
+        produto_cliente AS (
+            SELECT ff.Codigo_Cliente, p.unidade_de_negocio, SUM(ff.Valor_Liquido_Faturamento) AS valor,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY ff.Codigo_Cliente ORDER BY SUM(ff.Valor_Liquido_Faturamento) DESC
+                   ) AS rn
+            FROM {SCHEMA}.fct_faturamento_itens_sap ff
+            JOIN vendas.dim_produto p ON ff.Codigo_Produto = p.material
+            WHERE p.unidade_de_negocio IS NOT NULL
+            GROUP BY ff.Codigo_Cliente, p.unidade_de_negocio
+        ),
+        linha_heuristica AS (
+            SELECT CAST(Codigo_Cliente AS BIGINT) AS Codigo_Cliente,
+                   CASE unidade_de_negocio
+                       WHEN 'BLAU AESTHETICS' THEN 'AESTHETICS'
+                       WHEN 'ESPECIALIDADES-ONCO HEMATO' THEN 'ONCO / HEMATO'
+                       WHEN 'FARMA' THEN 'FARMA'
+                   END AS Linha_Negocio
+            FROM produto_cliente
+            WHERE rn = 1
+        )
+        SELECT chave_org_vda_cli, CAST(NULL AS BIGINT) AS Codigo_Cliente, Linha_Negocio, 'MANUAL' AS Origem_Linha_Negocio
+        FROM linha_manual
+        UNION ALL
+        SELECT CAST(NULL AS VARCHAR(20)) AS chave_org_vda_cli, Codigo_Cliente, Linha_Negocio, 'HEURISTICA_PRODUTO' AS Origem_Linha_Negocio
+        FROM linha_heuristica
+        WHERE Linha_Negocio IS NOT NULL
+    """  # nosec B608
+    return read_sql(query, database="GOLD")
 
 
 def ficha_material(codigo_produto: str) -> pd.DataFrame:
@@ -525,10 +758,11 @@ def cliente_360(codigo_cliente: str, somente_pendente: bool = False, meses_histo
     """
     where_pendencia = " AND Flag_Pendencia = 1" if somente_pendente else ""
     pedidos_query = f"""
-        SELECT *
-        FROM {SCHEMA}.fct_pendencia_sap
-        WHERE Codigo_Cliente = :cliente{where_pendencia}
-        ORDER BY Data_Inclusao_Pedido DESC
+        SELECT p.*, fvi.Moeda
+        FROM {SCHEMA}.fct_pendencia_sap p
+        {_moeda_pedido_join_sql()}
+        WHERE p.Codigo_Cliente = :cliente{where_pendencia}
+        ORDER BY p.Data_Inclusao_Pedido DESC
     """  # nosec B608
     df_pedidos = read_sql(pedidos_query, database="GOLD", params={"cliente": codigo_cliente})
 
@@ -608,10 +842,11 @@ def visao_360_material_cliente(
     if somente_pendente:
         condicoes.append("Flag_Pendencia = 1")
     pedidos_query = f"""
-        SELECT *
-        FROM {SCHEMA}.fct_pendencia_sap
-        WHERE {" AND ".join(condicoes)}
-        ORDER BY Data_Inclusao_Pedido DESC
+        SELECT p.*, fvi.Moeda
+        FROM {SCHEMA}.fct_pendencia_sap p
+        {_moeda_pedido_join_sql()}
+        WHERE {" AND ".join(f"p.{c}" for c in condicoes)}
+        ORDER BY p.Data_Inclusao_Pedido DESC
     """  # nosec B608
     df_pedidos = read_sql(pedidos_query, database="GOLD", params=params)
 
@@ -791,6 +1026,14 @@ def correlacao_oportunidade_pedido_pendencia_fatura(
     Comparar `Valor_Oportunidade` (cabeçalho) contra `Valor_Liquido_Pedido` (item) sempre vai
     divergir para Oportunidades com mais de um item — não é anomalia de negócio, é grão errado.
 
+    Traz `Moeda` do pedido (ver `_moeda_pedido_join_sql`) — filtrar `Moeda='BRL'` antes de
+    somar `Valor_Liquido_Pedido`/`Valor_Liquido_Faturado`/`Valor_Pendente_Faturamento`, pra
+    não misturar moeda (achado 2026-09-04, mesmo de `pendencias_abertas`). `Valor_Oportunidade`/
+    `Valor_Item_Oportunidade` são do Salesforce (org também multi-moeda — confirmado ao vivo
+    2026-09-04: BRL/COP/UYU/EUR em `salesforce.Opportunity.currency_iso_code`), moeda vem em
+    `Moeda_Oportunidade` (de `OpportunityLineItem.CurrencyIsoCode`) — mesma regra, nunca
+    somar sem filtrar.
+
     O retorno **não é paginado/amostrado** para exibição — traz todas as linhas que batem
     com o filtro (até `limit`), porque totais (soma de valor/quantidade, % com Oportunidade)
     precisam ser calculados sobre a população inteira do período, não sobre uma amostra. Se
@@ -877,6 +1120,7 @@ def correlacao_oportunidade_pedido_pendencia_fatura(
             p.Numero_Pedido, p.Item_Pedido, p.Data_Inclusao_Pedido, p.Tipo_Ordem_Venda,
             p.Codigo_Cliente, p.Nome_Cliente, p.Codigo_Produto, p.Descricao_Produto, p.Nome_Centro,
             p.Valor_Liquido_Pedido, p.Valor_Liquido_Faturado, p.Valor_Pendente_Faturamento,
+            fvi.Moeda,
             p.Qtd_Pedida, p.Qtd_Faturada, p.Qtd_Pendente_Operacional,
             p.Status_Faturamento, p.Status_Pendencia, p.Flag_Pendencia,
             p.Primeira_Data_Faturamento, p.Dias_Desde_Inclusao_Pedido,
@@ -884,6 +1128,7 @@ def correlacao_oportunidade_pedido_pendencia_fatura(
             CASE WHEN c.Descricao_Canal_Distribuicao IN {CANAIS_GOVERNO} THEN 'Governo' ELSE 'Privado' END AS Tipo_Cliente,
             ISNULL(cr.Cliente_Bloqueado, 0) AS Cliente_Bloqueado
         FROM {SCHEMA}.fct_pendencia_sap p
+        {_moeda_pedido_join_sql()}
         LEFT JOIN {SCHEMA}.dim_cliente_sap c
             ON p.Mandante = c.Mandante
             AND p.Codigo_Cliente = c.Codigo_Cliente
@@ -908,6 +1153,7 @@ def correlacao_oportunidade_pedido_pendencia_fatura(
         "Oportunidade_Ganha",
         "Valor_Oportunidade",
         "Valor_Item_Oportunidade",
+        "Moeda_Oportunidade",
         "Data_Criacao_Oportunidade",
         "Data_Fechamento_Oportunidade",
     ]
@@ -927,7 +1173,7 @@ def correlacao_oportunidade_pedido_pendencia_fatura(
     if numero_pedido:
         # Busca de um único pedido: equality direta é barata, sem precisar do filtro de data.
         oli_query = """
-            SELECT OpportunityId, Ordem_de_Venda_Sap__c, ItemNumero__c, TotalPrice
+            SELECT OpportunityId, Ordem_de_Venda_Sap__c, ItemNumero__c, TotalPrice, CurrencyIsoCode
             FROM salesforce.OpportunityLineItem
             WHERE RTRIM(LTRIM(Ordem_de_Venda_Sap__c)) = :numero_pedido
         """  # nosec B608
@@ -936,7 +1182,7 @@ def correlacao_oportunidade_pedido_pendencia_fatura(
         )
     else:
         oli_query = """
-            SELECT OpportunityId, Ordem_de_Venda_Sap__c, ItemNumero__c, TotalPrice
+            SELECT OpportunityId, Ordem_de_Venda_Sap__c, ItemNumero__c, TotalPrice, CurrencyIsoCode
             FROM salesforce.OpportunityLineItem
             WHERE CreatedDate >= :sf_data_inicio
               AND Ordem_de_Venda_Sap__c IS NOT NULL
@@ -1001,6 +1247,7 @@ def correlacao_oportunidade_pedido_pendencia_fatura(
             "is_won": "Oportunidade_Ganha",
             "amount": "Valor_Oportunidade",
             "TotalPrice": "Valor_Item_Oportunidade",
+            "CurrencyIsoCode": "Moeda_Oportunidade",
             "created_date": "Data_Criacao_Oportunidade",
             "close_date": "Data_Fechamento_Oportunidade",
         }
@@ -1082,7 +1329,11 @@ def pendencia_por_tipo_ordem_venda(
     data_fim: Optional[date] = None,
     tipo_cliente: Optional[str] = None,
 ) -> pd.DataFrame:
-    """Backlog aberto (Flag_Pendencia = 1) quebrado por Tipo_Ordem_Venda (SAP AUART)."""
+    """Backlog aberto (Flag_Pendencia = 1) quebrado por Tipo_Ordem_Venda (SAP AUART).
+
+    `Valor_Pendente_Total` soma só `Moeda='BRL'` (ver `_moeda_pedido_join_sql`) — não mistura
+    moeda; `Qtd_Pendente_Total` soma todas as moedas.
+    """
     params: dict[str, object] = {}
     join_sql, where_extra = _filtro_periodo_tipo_cliente(
         data_inicio, data_fim, tipo_cliente, params
@@ -1092,8 +1343,9 @@ def pendencia_por_tipo_ordem_venda(
             p.Tipo_Ordem_Venda,
             COUNT(*) AS Qtd_Itens,
             SUM(p.Qtd_Pendente_Operacional) AS Qtd_Pendente_Total,
-            SUM(p.Valor_Pendente_Faturamento) AS Valor_Pendente_Total
+            SUM(CASE WHEN fvi.Moeda = 'BRL' THEN p.Valor_Pendente_Faturamento ELSE 0 END) AS Valor_Pendente_Total
         FROM {SCHEMA}.fct_pendencia_sap p
+        {_moeda_pedido_join_sql()}
         {join_sql}
         WHERE p.Flag_Pendencia = 1{where_extra}
         GROUP BY p.Tipo_Ordem_Venda
@@ -1122,6 +1374,77 @@ def _moeda_case_sql(alias_pais: str = "c.Pais_Centro") -> str:
         f"WHEN '{pais}' THEN '{moeda}'" for pais, moeda in MOEDA_POR_PAIS_CENTRO.items()
     )
     return f"CASE {alias_pais} {when_clauses} ELSE 'Desconhecida' END"
+
+
+def _chave_org_vda_cli_sql(coluna_cliente: str, coluna_org: str) -> str:
+    """Reconstrói `chave_org_vda_cli` (cliente+Organização de Vendas) — mesma chave que
+    `vendas.dim_cliente_setor` usa nativamente, igual ao pipeline oficial do Painel Vendas
+    (`data-platform/airflow/dags/dbt/models/gold/vendas/fat_faturamento/fat_faturamento.sql`).
+
+    Achado GRAVE de auditoria (2026-09-06): as funções de Linha de Negócio deste módulo
+    faziam o crosswalk `Codigo_Cliente -> dim_cliente_setor` só por cliente (pegando o
+    `cod_setor` mais recente do cliente, ignorando em qual Organização de Vendas a
+    transação aconteceu) — só que o MESMO cliente pode ter `cod_setor` (e portanto Linha
+    de Negócio) DIFERENTE dependendo da Org (confirmado: 221 dos 2.046 clientes cadastrados
+    têm >1 `cod_setor` distinto entre Orgs). Medido o impacto: **R$510,9 milhões (14,1% do
+    faturamento de 12 meses)** tinha Linha de Negócio errada por causa disso — cliente é
+    "FARMA"/"AESTHETICS" na maioria das transações mas vira "ONCO/HEMATO" especificamente
+    quando fatura pela Org 1000 (ou vice-versa), e o crosswalk cliente-só aplicava o rótulo
+    da Org errada pra TODA a história do cliente. Fix: casar por `chave_org_vda_cli`
+    (cliente+Org), não só cliente — ver `_cte_linha_manual_sql`.
+
+    Clientes com código começando em '30' (grupo público/Ministério da Saúde, pulverizado
+    em várias `Codigo_Cliente` — ver `CLIENTE_MS_LIKE` em `query_faturamento_comercial.py`)
+    colapsam pra 1 chave só por Org ('30'+org), igual o pipeline oficial faz — não mantém o
+    resto do código do cliente nesse caso.
+
+    Args:
+        coluna_cliente: expressão SQL da coluna de `Codigo_Cliente` (ex.: "f.Codigo_Cliente").
+            Aceita com ou sem zero à esquerda — normaliza via `TRY_CAST(...AS BIGINT)`,
+            igual `vendas.dim_cliente_setor.cod_cliente` (sem zero-padding).
+        coluna_org: expressão SQL da coluna de Organização de Vendas (ex.:
+            "f.Codigo_Org_Vendas").
+    """
+    cliente_num = f"CAST(TRY_CAST({coluna_cliente} AS BIGINT) AS VARCHAR(20))"
+    return (
+        f"(CASE WHEN {cliente_num} LIKE '30%' "
+        f"THEN '30' + CAST({coluna_org} AS VARCHAR(20)) "
+        f"ELSE {cliente_num} + CAST({coluna_org} AS VARCHAR(20)) END)"
+    )
+
+
+def chave_org_vda_cli_pandas(codigo_cliente: pd.Series, codigo_org: pd.Series) -> pd.Series:
+    """Equivalente em pandas de `_chave_org_vda_cli_sql`, pra merge no dataframe (não SQL) —
+    usado por quem já trouxe `Codigo_Cliente`/`Codigo_Org_Vendas` num DataFrame (ex.: página
+    Pendência x Estoque) e precisa casar contra `linha_negocio_por_cliente`. Os dois
+    argumentos precisam compartilhar o índice (mesmo DataFrame).
+    """
+    cliente_num = pd.to_numeric(codigo_cliente, errors="coerce").astype("Int64").astype(str)
+    org = pd.Series(codigo_org).astype(str).str.strip()
+    chave = cliente_num + org
+    return chave.mask(cliente_num.str.startswith("30"), "30" + org)
+
+
+def _cte_linha_manual_sql() -> str:
+    """CTE `linha_manual` (Linha de Negócio "manual", camada 1 — ver
+    `faturamento_por_org_vendas_linha_negocio`), casada por `chave_org_vda_cli`
+    (cliente+Organização de Vendas — ver `_chave_org_vda_cli_sql` pro achado que motivou
+    isso), não só cliente. Reusada por toda função que precisa dessa camada — concatenar
+    com `WITH` de quem consome; junte a Org+cliente do fato via `_chave_org_vda_cli_sql`
+    contra `chave_org_vda_cli`.
+    """
+    return """
+        linha_manual AS (
+            SELECT chave_org_vda_cli, cod_setor, org_vendas AS Linha_Negocio
+            FROM (
+                SELECT cs.chave_org_vda_cli, cs.cod_setor, e.org_vendas,
+                       ROW_NUMBER() OVER (PARTITION BY cs.chave_org_vda_cli ORDER BY cs.periodo DESC) AS rn
+                FROM vendas.dim_cliente_setor cs
+                JOIN vendas.dim_estrutura e ON cs.cod_setor = e.cod_setor
+            ) x
+            WHERE rn = 1
+        )
+    """
 
 
 def estoque_restrito_disponivel(
@@ -1354,55 +1677,64 @@ def devolucoes_credito_motivo(
 ) -> pd.DataFrame:
     """Lançamentos de crédito/devolução/abatimento de cliente, com motivo em texto livre.
 
-    Fonte: `GOLD.vendas.dim_credito_devolucoes` (schema comercial/legado) — não
-    `vendas_sap.fct_credito_devolucoes_sap`, porque só a tabela `vendas` tem o campo
-    `Texto` preenchido (~93% de cobertura); a versão `vendas_sap` só tem código de tipo de
-    documento (RV/AB/DR/...) e conta contábil, sem texto — ver docs/CONTEXTO_VENDAS_SAP.md.
+    Fonte: `GOLD.vendas_sap.fct_credito_devolucoes_sap` (migrado em 2026-09-05 do schema
+    legado `vendas.dim_credito_devolucoes` — a suposição de que só o legado tinha texto livre
+    estava errada, `Texto_Motivo` já existe aqui com 93,7% de cobertura e o mesmo conteúdo,
+    confirmado linha a linha; ver docs/REGRAS_E_MELHORIAS_DW.md regra 1.2.3).
+
+    `Montante` vem de `Valor_Lancamento_Moeda_Local`, com o **sinal contábil real do SAP**
+    (`Indicador_Debito_Credito`: `S`=Soll/débito, positivo; `H`=Haben/crédito, negativo) —
+    decisão deliberada de manter o sinal em vez de forçar valor absoluto como o legado fazia.
+    Isso muda o significado de uma soma agregada: antes era sempre "total bruto de
+    transações" (positivo); agora é "posição líquida" (débitos menos créditos) — pra um tipo
+    de documento majoritariamente `H` (ex. `DG`), a soma passa a ser negativa. O campo
+    `Indicador_Debito_Credito` vem junto na linha pra quem precisar decompor por direção.
 
     Args:
-        data_inicio, data_fim: período de Data_documento. Se algum for None, usa o
+        data_inicio, data_fim: período de Data_Documento. Se algum for None, usa o
             default (últimos 180 dias corridos até hoje).
         excluir_faturamento_rotina: se True (padrão), exclui `Tp_doc = 'RV'` — é o tipo de
-            documento mais comum (>95% das linhas) e é só transferência de documento de
-            faturamento de rotina, texto sempre "Transf.docs.faturam. ...", não é uma
-            devolução/abatimento de negócio de fato.
+            documento mais comum (~92% das linhas, medido ao vivo em 2026-09-05) e é só
+            transferência de documento de faturamento de rotina, texto sempre
+            "Transf.docs.faturam. ...", não é uma devolução/abatimento de negócio de fato.
         nome_cliente: filtra por trecho do nome do cliente (LIKE, case-insensitive).
         codigo_cliente: filtra por código exato do cliente.
         tipo_cliente: "Governo" ou "Privado" (None = os dois) — ver `_condicao_tipo_cliente_por_codigo`.
         limit: teto de linhas.
 
     Nota: os códigos de `Tp_doc` (RV, AB, DR, DG, DZ, LM, DA, EX, SA) não têm tradução pra
-    texto disponível nesta base (a tabela SAP de descrição de tipo de documento, T003T, não
-    está replicada no HANA) — use o campo `Texto` como motivo legível; `Tp_doc` fica só como
-    código de apoio.
+    texto oficial disponível nesta base ainda (a tabela SAP `T003T` já foi confirmada com
+    dado real no HANA, mas a ingestão formal pro DW não foi feita — ver
+    docs/PROPOSTA_INGESTAO_CREDITO_E_MESTRES_SAP.md Parte C) — use o campo `Texto` como
+    motivo legível; `Tp_doc` fica só como código de apoio.
     """
     if data_fim is None:
         data_fim = date.today()
     if data_inicio is None:
         data_inicio = data_fim - timedelta(days=180)
 
-    filtros = ["d.Data_documento BETWEEN :data_inicio AND :data_fim"]
+    filtros = ["d.Data_Documento BETWEEN :data_inicio AND :data_fim"]
     params: dict[str, object] = {"data_inicio": data_inicio, "data_fim": data_fim, "rv": "RV"}
     if excluir_faturamento_rotina:
-        filtros.append("d.Tp_doc <> :rv")
+        filtros.append("d.Tipo_Documento_Contabil <> :rv")
     if nome_cliente:
-        filtros.append("cl.Nome_Cliente LIKE :nome_cliente")
+        filtros.append("d.Nome_Cliente LIKE :nome_cliente")
         params["nome_cliente"] = f"%{nome_cliente.strip()}%"
     if codigo_cliente:
-        filtros.append("CAST(d.Cliente AS BIGINT) = CAST(:codigo_cliente AS BIGINT)")
+        filtros.append("CAST(d.Codigo_Cliente AS BIGINT) = CAST(:codigo_cliente AS BIGINT)")
         params["codigo_cliente"] = codigo_cliente
-    join_tipo, condicao_tipo = _condicao_tipo_cliente_por_codigo(tipo_cliente, "d.Cliente")
+    join_tipo, condicao_tipo = _condicao_tipo_cliente_por_codigo(tipo_cliente, "d.Codigo_Cliente")
     where = "WHERE " + " AND ".join(filtros) + condicao_tipo
     query = f"""
         SELECT TOP {int(limit)}
-            d.N_documento, d.Cliente AS Codigo_Cliente, cl.Nome_Cliente,
-            d.Data_documento, d.Tp_doc, d.Montante, d.Texto
-        FROM vendas.dim_credito_devolucoes d
-        LEFT JOIN (SELECT DISTINCT Codigo_Cliente, Nome_Cliente FROM {SCHEMA}.dim_cliente_sap) cl
-            ON CAST(d.Cliente AS BIGINT) = CAST(cl.Codigo_Cliente AS BIGINT)
+            d.Numero_Documento_Contabil AS N_documento, d.Codigo_Cliente, d.Nome_Cliente,
+            d.Data_Documento AS Data_documento, d.Tipo_Documento_Contabil AS Tp_doc,
+            d.Valor_Lancamento_Moeda_Local AS Montante, d.Indicador_Debito_Credito,
+            d.Texto_Motivo AS Texto
+        FROM {SCHEMA}.fct_credito_devolucoes_sap d
         {join_tipo}
         {where}
-        ORDER BY d.Data_documento DESC
+        ORDER BY d.Data_Documento DESC
     """  # nosec B608
     return read_sql(query, database="GOLD", params=params)
 
@@ -1423,8 +1755,12 @@ def faturamento_por_org_vendas_linha_negocio(
     Linha de Negócio vem em 2 camadas, nessa ordem de prioridade (ver
     `docs/CONTEXTO_VENDAS_SAP.md` §8.2 pra investigação completa e números de precisão):
 
-    1. **Manual**: `Codigo_Cliente` -> `vendas.dim_cliente_setor` (`periodo` mais recente
-       por cliente) -> `vendas.dim_estrutura.org_vendas`. Cobertura ~52% dos clientes.
+    1. **Manual**: `Codigo_Cliente + Codigo_Org_Vendas` (`chave_org_vda_cli`, ver
+       `_chave_org_vda_cli_sql`) -> `vendas.dim_cliente_setor` (`periodo` mais recente por
+       chave) -> `vendas.dim_estrutura.org_vendas`. Cobertura ~52% dos clientes. **Casado
+       por cliente+Org, não só cliente** (fix 2026-09-06 — ver `_chave_org_vda_cli_sql`
+       pro achado: o mesmo cliente pode ter Linha de Negócio diferente conforme a Org,
+       afetava 14,1% do faturamento).
     2. **Heurística por produto** (fallback só pra quem não tem match manual): categoria
        dominante (maior `Valor_Liquido_Faturamento` histórico) de `vendas.dim_produto.
        unidade_de_negocio` entre os produtos que o cliente comprou. Testado contra os
@@ -1446,6 +1782,10 @@ def faturamento_por_org_vendas_linha_negocio(
         data_inicio, data_fim: período de Data_Faturamento. Se algum for None, usa o
             default (últimos 90 dias corridos até hoje).
         tipo_cliente: "Governo" ou "Privado" (None = os dois).
+
+    Achado 2026-09-04: `f.Moeda` varia por linha (BRL/UYU/COP/USD/CLP, sem conversão — ver
+    §10.0/§10.1). Agora sai no grão do retorno (1 linha por Org_Vendas+Linha_Negocio+Moeda)
+    — some/mostre por moeda separada, nunca junte tudo num só R$.
     """
     if data_fim is None:
         data_fim = date.today()
@@ -1453,18 +1793,9 @@ def faturamento_por_org_vendas_linha_negocio(
         data_inicio = data_fim - timedelta(days=90)
 
     join_tipo, condicao_tipo = _condicao_tipo_cliente_por_codigo(tipo_cliente, "f.Codigo_Cliente")
+    chave_fato = _chave_org_vda_cli_sql("f.Codigo_Cliente", "f.Codigo_Org_Vendas")
     query = f"""
-        WITH cliente_setor_atual AS (
-            SELECT cod_cliente, cod_setor,
-                   ROW_NUMBER() OVER (PARTITION BY cod_cliente ORDER BY periodo DESC) AS rn
-            FROM vendas.dim_cliente_setor
-        ),
-        linha_manual AS (
-            SELECT cs.cod_cliente, e.org_vendas AS Linha_Negocio
-            FROM cliente_setor_atual cs
-            JOIN vendas.dim_estrutura e ON cs.cod_setor = e.cod_setor
-            WHERE cs.rn = 1
-        ),
+        WITH{_cte_linha_manual_sql()},
         produto_cliente AS (
             SELECT ff.Codigo_Cliente, p.unidade_de_negocio, SUM(ff.Valor_Liquido_Faturamento) AS valor,
                    ROW_NUMBER() OVER (
@@ -1494,6 +1825,7 @@ def faturamento_por_org_vendas_linha_negocio(
                 WHEN lh.Linha_Negocio IS NOT NULL THEN 'HEURISTICA_PRODUTO'
                 ELSE 'NAO_ALOCADO'
             END AS Origem_Linha_Negocio,
+            f.Moeda,
             SUM(f.Valor_Liquido_Faturamento) AS Valor_Faturado,
             SUM(f.Qtd_Faturada) AS Qtd_Faturada,
             COUNT(*) AS Qtd_Itens
@@ -1501,7 +1833,7 @@ def faturamento_por_org_vendas_linha_negocio(
         LEFT JOIN (SELECT DISTINCT Org_Vendas, Descricao_Org_Vendas FROM {SCHEMA}.dim_cliente_sap) ov
             ON f.Codigo_Org_Vendas = ov.Org_Vendas
         LEFT JOIN linha_manual lm
-            ON CAST(f.Codigo_Cliente AS BIGINT) = CAST(lm.cod_cliente AS BIGINT)
+            ON {chave_fato} = lm.chave_org_vda_cli
         LEFT JOIN linha_heuristica lh
             ON CAST(f.Codigo_Cliente AS BIGINT) = CAST(lh.Codigo_Cliente AS BIGINT)
         {join_tipo}
@@ -1512,12 +1844,163 @@ def faturamento_por_org_vendas_linha_negocio(
                      WHEN lm.Linha_Negocio IS NOT NULL THEN 'MANUAL'
                      WHEN lh.Linha_Negocio IS NOT NULL THEN 'HEURISTICA_PRODUTO'
                      ELSE 'NAO_ALOCADO'
-                 END
+                 END,
+                 f.Moeda
         ORDER BY Valor_Faturado DESC
     """  # nosec B608
     return read_sql(
         query, database="GOLD", params={"data_inicio": data_inicio, "data_fim": data_fim}
     )
+
+
+def auditoria_linha_negocio_rh_vs_estrutura(meses: int = 12) -> pd.DataFrame:
+    """Divergências entre a Linha de Negócio "manual" (`dim_estrutura`, ver
+    `faturamento_por_org_vendas_linha_negocio`) e um sinal independente vindo do RH: a
+    Unidade de Negócio do vendedor que efetivamente faturou pro cliente.
+
+    Contexto (achado 2026-09-05, ver `docs/REGRAS_E_MELHORIAS_DW.md` §4.13): investigando
+    como reduzir a dependência de `dim_estrutura` (planilha SharePoint mantida manualmente),
+    achamos `GOLD.rh.fct_funcionario` — um fato de RH (SAP HCM) com organograma em texto
+    (`arvore_organizacional`). Sob `Comercial`, existe um ramo `Unidades De Negocios` com
+    filhos `Aesthetics`/`Farma`/`ESPECIALIDADES` (nome interno do braço ONCO/HEMATO) — dá pra
+    casar esses ~90 funcionários com `SILVER.salesforce."User"` por e-mail e daí com
+    `Codigo_Vendedor` de `fct_faturamento_itens_sap`.
+
+    Essa 2ª camada tem precisão alta (82-94%, testado contra os clientes com rótulo manual
+    conhecido) mas **não fecha nenhuma lacuna de cobertura** (99,6% do valor que ela cobre já
+    tinha rótulo manual) — não serve como substituto de `dim_estrutura`. O valor real que
+    sobra é auditoria: nos ~R$1,5bi onde as duas fontes coexistem, 16,5% (R$247,9mi, medido
+    2026-09-05) discordam. Esta função retorna só as linhas em desacordo — não uma
+    reconciliação completa — pensada pra achar candidato a rótulo manual desatualizado, não
+    pra ser fonte de verdade por si só (pode ser cross-sell legítimo de um vendedor de outra
+    unidade, não necessariamente erro de `dim_estrutura`).
+
+    Fontes: `GOLD.rh.fct_funcionario` (funcionário ativo, ramo "Unidades De Negocios") +
+    `SILVER.salesforce."User"` (join por e-mail) + `GOLD.vendas_sap.fct_faturamento_itens_sap`
+    (`Origem_Vendedor='SALESFORCE'`, `Codigo_Vendedor` casado por `LEFT(id,15)` — mesmo
+    achado técnico de `CONTEXTO_VENDAS_SAP.md`/regra 4.11: `Codigo_Vendedor` do Gold é o Id
+    Salesforce em 15 caracteres, `salesforce."User".id` vem em 18) + o crosswalk manual
+    (`vendas.dim_cliente_setor` -> `vendas.dim_estrutura.org_vendas`, casado por
+    `chave_org_vda_cli` = cliente+Org — ver `_chave_org_vda_cli_sql` pro achado 2026-09-06:
+    antes disso o crosswalk ignorava a Org e podia comparar contra o rótulo manual errado
+    quando o cliente vende por mais de 1 Org com setor distinto. Fat_vend também quebra por
+    `Codigo_Org_Vendas` agora — grão desta função virou Codigo_Cliente+Codigo_Org_Vendas, não
+    só Codigo_Cliente; os números "82-94%"/"16,5%"/"R$247,9mi" acima são de antes do fix
+    (2026-09-05), não remedidos).
+
+    Args:
+        meses: janela de faturamento considerada (meses corridos até hoje). Default 12.
+
+    Retorna 1 linha por Codigo_Cliente+Codigo_Org_Vendas em desacordo (raro um cliente
+    aparecer 2x, só quando diverge em mais de 1 Org), ordenado por Valor_Faturado desc:
+        Codigo_Cliente, Codigo_Org_Vendas, Nome_Cliente, Linha_Negocio_Manual (dim_estrutura,
+        já casado por Org), Unidade_Negocio_RH (Aesthetics/Farma/ESPECIALIDADES),
+        Linha_Negocio_Esperada_RH (traduzido pro mesmo vocabulário de Linha_Negocio_Manual),
+        Valor_Faturado (só do(s) vendedor(es) de Unidades De Negocios pra esse cliente+Org,
+        não o faturamento total do cliente), Nome_Vendedor, Nome_Cargo_Vendedor.
+    """
+    data_fim = date.today()
+    data_inicio = data_fim - timedelta(days=meses * 30)
+
+    rh = read_sql(
+        """
+        SELECT display_name, email, nome_cargo, arvore_organizacional
+        FROM rh.fct_funcionario
+        WHERE arvore_organizacional LIKE '%Unidades De Negocios%'
+          AND descricao_status_colaborador = 'ativo'
+        """,
+        database="GOLD",
+    )
+    if rh.empty:
+        return pd.DataFrame()
+    rh["Unidade_Negocio_RH"] = (
+        rh["arvore_organizacional"].str.extract(r"Unidades De Negocios > ([^>]+)")[0].str.strip()
+    )
+    rh["_email"] = rh["email"].str.strip().str.lower()
+
+    sf = read_sql('SELECT id, email FROM salesforce."User"', database="SILVER")
+    sf["_email"] = sf["email"].str.strip().str.lower()
+
+    vendedores = rh.merge(sf[["id", "_email"]], on="_email", how="inner")
+    if vendedores.empty:
+        return pd.DataFrame()
+    vendedores["_id15"] = vendedores["id"].str[:15]
+
+    fat_vend = read_sql(
+        f"""
+        SELECT Codigo_Vendedor, Codigo_Cliente, Codigo_Org_Vendas, SUM(Valor_Liquido_Faturamento) AS Valor_Faturado
+        FROM {SCHEMA}.fct_faturamento_itens_sap
+        WHERE Origem_Vendedor = 'SALESFORCE' AND Data_Faturamento BETWEEN :data_inicio AND :data_fim
+        GROUP BY Codigo_Vendedor, Codigo_Cliente, Codigo_Org_Vendas
+        """,  # nosec B608
+        database="GOLD",
+        params={"data_inicio": data_inicio, "data_fim": data_fim},
+    )
+    fat_vend["_id15"] = fat_vend["Codigo_Vendedor"].str[:15]
+    fat_vend["Codigo_Cliente"] = fat_vend["Codigo_Cliente"].astype(str).str.strip()
+
+    fat_unidade = fat_vend.merge(
+        vendedores[["_id15", "Unidade_Negocio_RH", "display_name", "nome_cargo"]],
+        on="_id15", how="inner",
+    )
+    if fat_unidade.empty:
+        return pd.DataFrame()
+    # agrega por cliente+Org+unidade — um cliente pode ter mais de 1 vendedor de Unidades De
+    # Negocios (inclusive um por Org, ver achado de `_chave_org_vda_cli_sql`); mantém só o
+    # par com maior valor por cliente+Org pra não fragmentar a comparação por vendedor.
+    fat_unidade = (
+        fat_unidade.sort_values("Valor_Faturado", ascending=False)
+        .groupby(["Codigo_Cliente", "Codigo_Org_Vendas"], as_index=False)
+        .first()
+    )
+    fat_unidade["_chave"] = chave_org_vda_cli_pandas(fat_unidade["Codigo_Cliente"], fat_unidade["Codigo_Org_Vendas"])
+
+    manual = read_sql(
+        f"""
+        WITH{_cte_linha_manual_sql()}
+        SELECT chave_org_vda_cli, Linha_Negocio AS Linha_Negocio_Manual
+        FROM linha_manual
+        WHERE Linha_Negocio IN ('AESTHETICS','FARMA','ONCO / HEMATO')
+        """,  # nosec B608
+        database="GOLD",
+    )
+
+    comparacao = fat_unidade.merge(
+        manual[["chave_org_vda_cli", "Linha_Negocio_Manual"]],
+        left_on="_chave", right_on="chave_org_vda_cli", how="inner",
+    )
+    if comparacao.empty:
+        return pd.DataFrame()
+
+    mapa_esperado = {
+        "Aesthetics": "AESTHETICS",
+        "Farma": "FARMA",
+        "ESPECIALIDADES": "ONCO / HEMATO",
+    }
+    comparacao["Linha_Negocio_Esperada_RH"] = comparacao["Unidade_Negocio_RH"].map(mapa_esperado)
+    divergentes = comparacao[
+        comparacao["Linha_Negocio_Esperada_RH"].notna()
+        & (comparacao["Linha_Negocio_Esperada_RH"] != comparacao["Linha_Negocio_Manual"])
+    ].copy()
+    if divergentes.empty:
+        return pd.DataFrame()
+
+    nomes_cliente = read_sql(
+        f"SELECT DISTINCT Codigo_Cliente, Nome_Cliente FROM {SCHEMA}.dim_cliente_sap",
+        database="GOLD",
+    )
+    nomes_cliente["Codigo_Cliente"] = nomes_cliente["Codigo_Cliente"].astype(str).str.strip()
+    divergentes = divergentes.merge(nomes_cliente, on="Codigo_Cliente", how="left")
+
+    divergentes = divergentes.rename(
+        columns={"display_name": "Nome_Vendedor", "nome_cargo": "Nome_Cargo_Vendedor"}
+    )
+    return divergentes[
+        [
+            "Codigo_Cliente", "Codigo_Org_Vendas", "Nome_Cliente", "Linha_Negocio_Manual", "Unidade_Negocio_RH",
+            "Linha_Negocio_Esperada_RH", "Valor_Faturado", "Nome_Vendedor", "Nome_Cargo_Vendedor",
+        ]
+    ].sort_values("Valor_Faturado", ascending=False).reset_index(drop=True)
 
 
 def meta_vs_realizado_mensal(
@@ -1532,8 +2015,10 @@ def meta_vs_realizado_mensal(
     aqui não há heurística possível: meta não é algo observável em transação nenhuma.
 
     Realizado vem de `fct_faturamento_itens_sap`, atribuído ao mesmo `cod_setor` da meta via
-    `vendas.dim_cliente_setor` (mesmo crosswalk cliente->setor de
-    `faturamento_por_org_vendas_linha_negocio` — herda a cobertura ~52%: faturamento de
+    `vendas.dim_cliente_setor`, casado por `chave_org_vda_cli` (cliente+Org — ver
+    `_chave_org_vda_cli_sql` pro achado 2026-09-06: antes casava só por cliente, ignorando
+    a Org, o que podia atribuir o Realizado ao `cod_setor` errado quando o cliente vende por
+    mais de 1 Org com setor distinto) — herda a cobertura ~52% do crosswalk: faturamento de
     cliente sem `cod_setor` mapeado não desaparece, só não casa com nenhuma meta e cai em
     BU 'NAO ALOCADO'). `BU` aqui é o valor literal de `fat_meta_equipe.bu` (`ONCO-HEMATO`,
     `FARMA`, `BLAU AESTHETICS`, `MS`, `Botulift`) — **não** é 1:1 com `Linha_Negocio` de
@@ -1547,51 +2032,90 @@ def meta_vs_realizado_mensal(
             mês corrente vai mostrar Realizado parcial (mês incompleto) pra esse mês, o que
             é esperado, não um bug.
         bu: filtra 1 BU específica. None = todas.
+
+    Achado 2026-09-04: `Meta_Valor` (`vendas.fat_meta_equipe`) é planejamento orçamentário,
+    sempre BRL (não existe meta em moeda estrangeira nesta base); `Valor_Realizado` agora é
+    convertido pra BRL (taxa real do SAP, `TCURR`, ver `converter_para_brl`) antes de somar
+    — não filtra mais `Moeda='BRL'` (isso subestimava o realizado). Conversão em 2 passos:
+    busca Realizado por Mes+cod_setor+material+Moeda, converte e reagrega pra
+    Mes+cod_setor+material em pandas, só depois junta com Meta — juntar ANTES de converter
+    faria fan-out de `Meta_Valor` por moeda (Meta não tem essa dimensão pra dar match 1:1).
     """
     if data_fim is None:
         data_fim = date.today()
     if data_inicio is None:
         data_inicio = data_fim.replace(month=1, day=1)
 
-    condicao_bu = " AND m.bu = :bu" if bu else ""
-    query = f"""
+    chave_fato = _chave_org_vda_cli_sql("f.Codigo_Cliente", "f.Codigo_Org_Vendas")
+    realizado_query = f"""
         WITH cliente_setor_atual AS (
-            SELECT cod_cliente, cod_setor,
-                   ROW_NUMBER() OVER (PARTITION BY cod_cliente ORDER BY periodo DESC) AS rn
+            SELECT chave_org_vda_cli, cod_setor,
+                   ROW_NUMBER() OVER (PARTITION BY chave_org_vda_cli ORDER BY periodo DESC) AS rn
             FROM vendas.dim_cliente_setor
-        ),
-        realizado AS (
-            SELECT
-                DATEFROMPARTS(YEAR(f.Data_Faturamento), MONTH(f.Data_Faturamento), 1) AS mes,
-                cs.cod_setor,
-                f.Codigo_Produto AS material,
-                SUM(f.Valor_Liquido_Faturamento) AS valor_realizado,
-                SUM(f.Qtd_Faturada) AS unidades_realizado
-            FROM {SCHEMA}.fct_faturamento_itens_sap f
-            LEFT JOIN cliente_setor_atual cs
-                ON CAST(f.Codigo_Cliente AS BIGINT) = CAST(cs.cod_cliente AS BIGINT) AND cs.rn = 1
-            WHERE f.Data_Faturamento BETWEEN :data_inicio AND :data_fim
-            GROUP BY DATEFROMPARTS(YEAR(f.Data_Faturamento), MONTH(f.Data_Faturamento), 1),
-                     cs.cod_setor, f.Codigo_Produto
         )
         SELECT
-            COALESCE(m.data_meta, r.mes) AS Mes,
-            COALESCE(m.bu, 'NAO ALOCADO') AS BU,
-            SUM(m.meta) AS Meta_Valor,
-            SUM(m.unidades) AS Meta_Unidades,
-            SUM(r.valor_realizado) AS Valor_Realizado,
-            SUM(r.unidades_realizado) AS Unidades_Realizado
+            DATEFROMPARTS(YEAR(f.Data_Faturamento), MONTH(f.Data_Faturamento), 1) AS Mes,
+            cs.cod_setor,
+            f.Codigo_Produto AS material,
+            f.Moeda,
+            SUM(f.Valor_Liquido_Faturamento) AS Valor_Realizado,
+            SUM(f.Qtd_Faturada) AS Unidades_Realizado
+        FROM {SCHEMA}.fct_faturamento_itens_sap f
+        LEFT JOIN cliente_setor_atual cs
+            ON {chave_fato} = cs.chave_org_vda_cli AND cs.rn = 1
+        WHERE f.Data_Faturamento BETWEEN :data_inicio AND :data_fim
+        GROUP BY DATEFROMPARTS(YEAR(f.Data_Faturamento), MONTH(f.Data_Faturamento), 1),
+                 cs.cod_setor, f.Codigo_Produto, f.Moeda
+    """  # nosec B608
+    df_realizado = read_sql(
+        realizado_query, database="GOLD", params={"data_inicio": data_inicio, "data_fim": data_fim}
+    )
+    if not df_realizado.empty:
+        df_realizado["Valor_Realizado"] = converter_para_brl(
+            df_realizado, "Valor_Realizado", data_col="Mes"
+        ).fillna(0.0)
+        df_realizado = (
+            df_realizado.groupby(["Mes", "cod_setor", "material"], as_index=False, dropna=False)
+            .agg(Valor_Realizado=("Valor_Realizado", "sum"), Unidades_Realizado=("Unidades_Realizado", "sum"))
+        )
+
+    condicao_bu = " AND m.bu = :bu" if bu else ""
+    meta_query = f"""
+        SELECT
+            m.data_meta AS Mes, m.cod_setor, m.material, m.bu AS BU,
+            SUM(m.meta) AS Meta_Valor, SUM(m.unidades) AS Meta_Unidades
         FROM vendas.fat_meta_equipe m
-        FULL OUTER JOIN realizado r
-            ON m.data_meta = r.mes AND m.cod_setor = r.cod_setor AND m.material = r.material
-        WHERE COALESCE(m.data_meta, r.mes) BETWEEN :data_inicio AND :data_fim{condicao_bu}
-        GROUP BY COALESCE(m.data_meta, r.mes), COALESCE(m.bu, 'NAO ALOCADO')
-        ORDER BY Mes, BU
+        WHERE m.data_meta BETWEEN :data_inicio AND :data_fim{condicao_bu}
+        GROUP BY m.data_meta, m.cod_setor, m.material, m.bu
     """  # nosec B608
     params = {"data_inicio": data_inicio, "data_fim": data_fim}
     if bu:
         params["bu"] = bu
-    return read_sql(query, database="GOLD", params=params)
+    df_meta = read_sql(meta_query, database="GOLD", params=params)
+    if not df_meta.empty:
+        df_meta["Mes"] = pd.to_datetime(df_meta["Mes"])
+    if not df_realizado.empty:
+        df_realizado["Mes"] = pd.to_datetime(df_realizado["Mes"])
+
+    resultado = df_realizado.merge(
+        df_meta, on=["Mes", "cod_setor", "material"], how="outer", suffixes=("", "_meta")
+    )
+    resultado["BU"] = resultado["BU"].fillna("NAO ALOCADO")
+    for col in ("Meta_Valor", "Meta_Unidades", "Valor_Realizado", "Unidades_Realizado"):
+        resultado[col] = resultado[col].fillna(0.0) if col in resultado else 0.0
+
+    resumo = (
+        resultado.groupby(["Mes", "BU"], as_index=False)
+        .agg(
+            Meta_Valor=("Meta_Valor", "sum"),
+            Meta_Unidades=("Meta_Unidades", "sum"),
+            Valor_Realizado=("Valor_Realizado", "sum"),
+            Unidades_Realizado=("Unidades_Realizado", "sum"),
+        )
+        .sort_values(["Mes", "BU"])
+        .reset_index(drop=True)
+    )
+    return resumo
 
 
 def estoque_totais() -> pd.DataFrame:
@@ -1693,16 +2217,22 @@ def faturamento_mensal(meses: int = 12) -> pd.DataFrame:
     Nota: filtra também `Data_Faturamento <= hoje` — achado ao vivo (2026-08-25) tem pelo
     menos 1 linha com data no ano 2108 (corrompida), que sem esse teto entra na janela de
     qualquer jeito por ser "maior que" o limite inferior e polui o mês mais recente do gráfico.
+
+    Achado 2026-09-04: `fct_faturamento_itens_sap.Moeda` varia por linha (BRL/UYU/COP/USD/
+    CLP, sem conversão — ver docs/CONTEXTO_VENDAS_SAP.md §10.0/§10.1). `Moeda` agora sai no
+    grão do retorno (1 linha por Mes+Moeda) — quem consumir deve somar/mostrar por moeda
+    separada (`scripts/ui_theme.py::render_valor_por_moeda`), nunca juntar tudo num só R$.
     """
     query = f"""
         SELECT
             FORMAT(Data_Faturamento, 'yyyy-MM') AS Mes,
+            Moeda,
             SUM(Valor_Liquido_Faturamento) AS Valor_Faturado,
             SUM(Qtd_Faturada) AS Qtd_Faturada
         FROM {SCHEMA}.fct_faturamento_itens_sap
         WHERE Data_Faturamento >= DATEADD(month, :meses_neg, CAST(GETDATE() AS date))
             AND Data_Faturamento <= CAST(GETDATE() AS date)
-        GROUP BY FORMAT(Data_Faturamento, 'yyyy-MM')
+        GROUP BY FORMAT(Data_Faturamento, 'yyyy-MM'), Moeda
         ORDER BY Mes
     """  # nosec B608
     return read_sql(query, database="GOLD", params={"meses_neg": -abs(int(meses))})
@@ -1715,13 +2245,21 @@ def pedidos_mensal(meses: int = 24) -> pd.DataFrame:
     `fct_pendencia_sap`/`fct_estoque_lote_sap`, que só guardam o estado de hoje — ver
     docs/CONTEXTO_VENDAS_SAP.md). Serve pra ver se o volume entrando no funil está subindo
     ou caindo ao longo do tempo — não é o mesmo que "backlog", que não tem série histórica.
+
+    `Valor_Pedido` soma só `Moeda='BRL'` (mesmo achado de moeda de `_moeda_pedido_join_sql`,
+    aqui direto na coluna nativa `fct_vendas_itens_sap.Moeda`, sem precisar de JOIN) — não
+    mistura BRL/USD/UYU/COP/EUR. `Qtd_Pedida`/`Qtd_Pedidos` (todos os pedidos, qualquer moeda)
+    não são afetados, mas por isso não dividir `Valor_Pedido` por `Qtd_Pedidos` pra tirar
+    "valor médio de pedido" — o denominador incluiria pedido em moeda estrangeira que não
+    entrou no numerador; use `Qtd_Pedidos_BRL` (só pedidos BRL) pra essa conta.
     """
     query = f"""
         SELECT
             FORMAT(Data_Inclusao_Pedido, 'yyyy-MM') AS Mes,
-            SUM(Valor_Liquido_Pedido) AS Valor_Pedido,
+            SUM(CASE WHEN Moeda = 'BRL' THEN Valor_Liquido_Pedido ELSE 0 END) AS Valor_Pedido,
             SUM(Qtd_Pedida_Original) AS Qtd_Pedida,
-            COUNT(DISTINCT Numero_Pedido) AS Qtd_Pedidos
+            COUNT(DISTINCT Numero_Pedido) AS Qtd_Pedidos,
+            COUNT(DISTINCT CASE WHEN Moeda = 'BRL' THEN Numero_Pedido END) AS Qtd_Pedidos_BRL
         FROM {SCHEMA}.fct_vendas_itens_sap
         WHERE Data_Inclusao_Pedido >= DATEADD(month, :meses_neg, CAST(GETDATE() AS date))
             AND Data_Inclusao_Pedido <= CAST(GETDATE() AS date)
@@ -1742,6 +2280,10 @@ def pedidos_por_cliente(
 
     Fonte: `fct_vendas_itens_sap` (mesma de `pedidos_mensal`) — grão Pedido+Item, agregado
     aqui primeiro por Pedido (pra não confundir "item" com "pedido") e depois por cliente.
+
+    Restrito a pedidos `Moeda='BRL'` (mesmo achado de moeda de `_moeda_pedido_join_sql`) —
+    cliente com pedidos só em moeda estrangeira no período não aparece neste ranking, pra não
+    misturar BRL/USD/UYU/COP/EUR num único "Valor_Medio_Pedido".
     """
     params: dict[str, object] = {}
     join_sql, where_extra = _filtro_periodo_tipo_cliente(
@@ -1756,7 +2298,8 @@ def pedidos_por_cliente(
                 SUM(p.Valor_Liquido_Pedido) AS Valor_Pedido
             FROM {SCHEMA}.fct_vendas_itens_sap p
             {join_sql}
-            WHERE p.Data_Inclusao_Pedido BETWEEN :data_inicio AND :data_fim{where_extra}
+            WHERE p.Data_Inclusao_Pedido BETWEEN :data_inicio AND :data_fim
+                AND p.Moeda = 'BRL'{where_extra}
             GROUP BY p.Codigo_Cliente, p.Numero_Pedido
         )
         SELECT TOP {int(n)}
@@ -1788,18 +2331,26 @@ def devolucoes_mensal(meses: int = 24, excluir_faturamento_rotina: bool = True) 
         meses: janela em meses.
         excluir_faturamento_rotina: se True (padrão), exclui `Tipo_Documento_Contabil = 'RV'`
             — ver nota em `devolucoes_credito_motivo`.
+
+    Achado 2026-09-04: `Valor_Lancamento_Moeda_Local` é por `Empresa_Codigo` (5 empresas SAP
+    distintas na base: 1000, CO10, UR01, BG01, IICT — confirmado ao vivo, valor real em
+    todas), e esta base não tem o de-para `Empresa_Codigo` -> moeda/país documentado (mesma
+    lacuna de `BWKEY->BUKRS` citada em §6.9) — não dá pra rotular com o código de moeda com
+    segurança. Sai por `Empresa_Codigo` em vez de moeda (1 linha por Mes+Empresa_Codigo) —
+    não some entre empresas sem confirmar antes que são todas BRL.
     """
     where_rv = "AND Tipo_Documento_Contabil <> 'RV'" if excluir_faturamento_rotina else ""
     query = f"""
         SELECT
             FORMAT(Data_Documento, 'yyyy-MM') AS Mes,
+            Empresa_Codigo,
             SUM(Valor_Lancamento_Moeda_Local) AS Valor,
             COUNT(*) AS Qtd_Lancamentos
         FROM {SCHEMA}.fct_credito_devolucoes_sap
         WHERE Data_Documento >= DATEADD(month, :meses_neg, CAST(GETDATE() AS date))
             AND Data_Documento <= CAST(GETDATE() AS date)
             {where_rv}
-        GROUP BY FORMAT(Data_Documento, 'yyyy-MM')
+        GROUP BY FORMAT(Data_Documento, 'yyyy-MM'), Empresa_Codigo
         ORDER BY Mes
     """  # nosec B608
     return read_sql(query, database="GOLD", params={"meses_neg": -abs(int(meses))})
@@ -1844,6 +2395,9 @@ def faturamento_por_vendedor(
         data_inicio, data_fim: período de `Data_Faturamento`. Se algum for None, usa o
             default (mês corrente até hoje).
         tipo_cliente: "Governo" ou "Privado" (None = os dois).
+
+    Achado 2026-09-04: `f.Moeda` varia por linha — sai no grão do retorno (1 linha por
+    Vendedor+Moeda), some/mostre por moeda separada.
     """
     if data_fim is None:
         data_fim = date.today()
@@ -1857,6 +2411,7 @@ def faturamento_por_vendedor(
             COALESCE(MAX(v.Nome_Vendedor_SF), 'Sem Vendedor Identificado') AS Nome_Vendedor,
             MAX(v.Unidade_Negocio) AS Unidade_Negocio,
             MAX(v.Regiao) AS Regiao,
+            f.Moeda,
             SUM(f.Valor_Liquido_Faturamento) AS Valor_Faturado,
             SUM(f.Qtd_Faturada) AS Qtd_Faturada,
             COUNT(DISTINCT f.Codigo_Cliente) AS Qtd_Clientes,
@@ -1865,7 +2420,7 @@ def faturamento_por_vendedor(
         {_vendedor_join_sql("f")}
         {join_tipo}
         WHERE f.Data_Faturamento BETWEEN :data_inicio AND :data_fim{condicao_tipo}
-        GROUP BY COALESCE(f.Codigo_Vendedor, 'SEM_VENDEDOR')
+        GROUP BY COALESCE(f.Codigo_Vendedor, 'SEM_VENDEDOR'), f.Moeda
         ORDER BY Valor_Faturado DESC
     """  # nosec B608
     return read_sql(query, database="GOLD", params={"data_inicio": data_inicio, "data_fim": data_fim})
@@ -1875,11 +2430,13 @@ def faturamento_vendedor_mensal(codigo_vendedor: str, meses: int = 12) -> pd.Dat
     """Evolução mensal de faturamento de 1 vendedor específico (`Codigo_Vendedor`).
 
     Mesma fonte/histórico de `faturamento_mensal()`, filtrado a 1 vendedor — pra drill-down
-    de tendência individual em `pages/18_Visao_Vendedor.py`.
+    de tendência individual em `pages/18_Visao_Vendedor.py`. `Moeda` sai no grão do retorno
+    (achado 2026-09-04) — some/mostre por moeda separada.
     """
     query = f"""
         SELECT
             FORMAT(f.Data_Faturamento, 'yyyy-MM') AS Mes,
+            f.Moeda,
             SUM(f.Valor_Liquido_Faturamento) AS Valor_Faturado,
             SUM(f.Qtd_Faturada) AS Qtd_Faturada,
             COUNT(DISTINCT f.Codigo_Cliente) AS Qtd_Clientes
@@ -1887,7 +2444,7 @@ def faturamento_vendedor_mensal(codigo_vendedor: str, meses: int = 12) -> pd.Dat
         WHERE f.Codigo_Vendedor = :codigo_vendedor
             AND f.Data_Faturamento >= DATEADD(month, :meses_neg, CAST(GETDATE() AS date))
             AND f.Data_Faturamento <= CAST(GETDATE() AS date)
-        GROUP BY FORMAT(f.Data_Faturamento, 'yyyy-MM')
+        GROUP BY FORMAT(f.Data_Faturamento, 'yyyy-MM'), f.Moeda
         ORDER BY Mes
     """  # nosec B608
     return read_sql(
@@ -1903,11 +2460,17 @@ def top_clientes_por_vendedor(
     data_fim: date,
     n: int = 15,
 ) -> pd.DataFrame:
-    """Top N clientes faturados por 1 vendedor específico, no período."""
+    """Top N clientes faturados por 1 vendedor específico, no período.
+
+    `Moeda` sai no grão do retorno (achado 2026-09-04) — cliente com faturamento em mais de
+    1 moeda aparece em mais de 1 linha; não some `Valor_Faturado` entre linhas de moeda
+    diferente.
+    """
     query = f"""
         SELECT TOP {int(n)}
             f.Codigo_Cliente,
             MAX(cl.Nome_Cliente) AS Nome_Cliente,
+            f.Moeda,
             SUM(f.Valor_Liquido_Faturamento) AS Valor_Faturado,
             SUM(f.Qtd_Faturada) AS Qtd_Faturada
         FROM {SCHEMA}.fct_faturamento_itens_sap f
@@ -1915,7 +2478,7 @@ def top_clientes_por_vendedor(
             ON f.Codigo_Cliente = cl.Codigo_Cliente
         WHERE f.Codigo_Vendedor = :codigo_vendedor
             AND f.Data_Faturamento BETWEEN :data_inicio AND :data_fim
-        GROUP BY f.Codigo_Cliente
+        GROUP BY f.Codigo_Cliente, f.Moeda
         ORDER BY Valor_Faturado DESC
     """  # nosec B608
     return read_sql(
@@ -1960,6 +2523,11 @@ def faturamento_vendedor_com_meta_bu(
     Args:
         data_inicio, data_fim: período de `Data_Faturamento` (default: mês corrente).
         tipo_cliente: "Governo" ou "Privado" (None = os dois).
+
+    `Moeda` sai no grão do retorno (achado 2026-09-04, herdado de `faturamento_por_vendedor`)
+    — `Meta_Valor_BU`/`Valor_Realizado_BU`/`Atingimento_BU` são sempre BRL (ver
+    `meta_vs_realizado_mensal`) e ficam repetidos em toda linha da BU independente da moeda
+    do vendedor; não comparar `Valor_Faturado` de linha não-BRL contra esses 3 campos.
     """
     if data_fim is None:
         data_fim = date.today()

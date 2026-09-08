@@ -29,14 +29,16 @@ from scripts.query_faturamento_comercial import (  # noqa: E402
 )
 from scripts.query_vendas_sap import (  # noqa: E402
     aging_pendencias,
+    converter_para_brl,
     credito_disponivel_clientes,
     devolucoes_credito_motivo,
     estoque_totais,
     estoque_validade_resumo,
     faturamento_mensal,
     pendencia_status_estoque,
+    taxas_cambio_brl,
 )
-from scripts.ui_theme import card  # noqa: E402
+from scripts.ui_theme import card, render_valor_por_moeda  # noqa: E402
 
 st.set_page_config(page_title="Visão Executiva — Vendas", page_icon="🔎", layout="wide")
 
@@ -101,8 +103,15 @@ valor_sem_estoque = (
 )
 pct_sem_estoque = (valor_sem_estoque / valor_pendente_total) if valor_pendente_total else 0.0
 
+mes_mais_recente = df_fat_mensal["Mes"].max() if not df_fat_mensal.empty else None
+df_fat_mes_atual = (
+    df_fat_mensal[df_fat_mensal["Mes"] == mes_mais_recente] if mes_mais_recente else df_fat_mensal
+)
+_taxas_cambio = taxas_cambio_brl()
 valor_faturado_mes_atual = (
-    df_fat_mensal["Valor_Faturado"].iloc[-1] if not df_fat_mensal.empty else 0.0
+    converter_para_brl(df_fat_mes_atual, "Valor_Faturado", data_col="Mes", taxas=_taxas_cambio).sum()
+    if not df_fat_mes_atual.empty
+    else 0.0
 )
 
 valor_estoque_total = (
@@ -149,6 +158,9 @@ with st.container(border=True):
         f"{pct_60mais:.0%}",
         help="Fatia do valor pendente total que está aberta há mais de 60 dias.",
     )
+    if not df_fat_mes_atual.empty and (df_fat_mes_atual["Moeda"] != "BRL").any():
+        with st.expander("Faturado do mês corrente, por moeda (sem conversão)"):
+            render_valor_por_moeda(df_fat_mes_atual, "Valor_Faturado")
 
 st.divider()
 
@@ -156,13 +168,29 @@ st.subheader("Evolução do faturamento (últimos 12 meses)")
 st.caption(
     "`vendas_sap.fct_faturamento_itens_sap`, total bruto (todas Org Vendas, incl. filial "
     "estrangeira/documento intercompany) — mesmo total da seção Faturamento Comercial "
-    "abaixo, só sem quebra por dimensão."
+    "abaixo, só sem quebra por dimensão. Convertido pra R$ (câmbio `TCURR`); abra o "
+    "expander abaixo pra ver por moeda original, sem conversão."
 )
 if df_fat_mensal.empty:
     st.info("Sem dado de faturamento no período.")
 else:
     with card("home-faturamento-mensal"):
-        st.bar_chart(df_fat_mensal.set_index("Mes")["Valor_Faturado"])
+        serie_fat_mensal_brl = (
+            df_fat_mensal.assign(
+                Valor_BRL=converter_para_brl(
+                    df_fat_mensal, "Valor_Faturado", data_col="Mes", taxas=_taxas_cambio
+                )
+            )
+            .groupby("Mes")["Valor_BRL"]
+            .sum()
+        )
+        st.bar_chart(serie_fat_mensal_brl)
+        if (df_fat_mensal["Moeda"] != "BRL").any():
+            with st.expander("Ver por moeda, sem conversão"):
+                pivot_fat_mensal = df_fat_mensal.pivot_table(
+                    index="Mes", columns="Moeda", values="Valor_Faturado", aggfunc="sum", fill_value=0
+                )
+                st.bar_chart(pivot_fat_mensal)
 
 st.divider()
 
@@ -192,12 +220,32 @@ df_com_serie_mes = dados_com["serie_mes"]
 df_com_meta_canal = dados_com["meta_canal"]
 df_com_canal_ytd = dados_com["canal_ytd"]
 
+# Achado 2026-09-04: faturamento_serie/faturamento_por_dimensao trazem 1 linha por
+# Mes/Dimensao+Moeda — precisa converter pra BRL (TCURR) antes de somar/exibir, senão
+# "NAO ALOCADO" (ou qualquer Canal com faturamento em mais de 1 moeda) aparece repetido,
+# 1 linha por moeda, em vez de 1 total só.
+_taxas_home_com = taxas_cambio_brl()
+if not df_com_serie_mes.empty:
+    df_com_serie_mes = df_com_serie_mes.assign(
+        Valor_BRL=converter_para_brl(df_com_serie_mes, "Valor_Faturado", data_col="Mes", taxas=_taxas_home_com)
+    )
+if not df_com_canal_ytd.empty:
+    df_com_canal_ytd = df_com_canal_ytd.assign(
+        _Data_Ref=_inicio_ano + (hoje - _inicio_ano) / 2,
+    )
+    df_com_canal_ytd = (
+        df_com_canal_ytd.assign(
+            Valor_BRL=converter_para_brl(df_com_canal_ytd, "Valor_Faturado", data_col="_Data_Ref", taxas=_taxas_home_com)
+        )
+        .groupby("Dimensao", as_index=False)["Valor_BRL"].sum()
+    )
+
 faturado_mtd_com = (
-    df_com_serie_mes.loc[df_com_serie_mes["Mes"] == hoje.strftime("%Y-%m"), "Valor_Faturado"].sum()
+    df_com_serie_mes.loc[df_com_serie_mes["Mes"] == hoje.strftime("%Y-%m"), "Valor_BRL"].sum()
     if not df_com_serie_mes.empty
     else 0.0
 )
-faturado_ytd_com = df_com_serie_mes["Valor_Faturado"].sum() if not df_com_serie_mes.empty else 0.0
+faturado_ytd_com = df_com_serie_mes["Valor_BRL"].sum() if not df_com_serie_mes.empty else 0.0
 meta_mtd_com = (
     df_com_meta_canal.loc[df_com_meta_canal["Mes"] == hoje.strftime("%Y-%m"), "Meta_Valor"].sum()
     if not df_com_meta_canal.empty
@@ -233,16 +281,16 @@ if not df_com_canal_ytd.empty:
     with card("home-canal-ytd"):
         col_com_a, col_com_b = st.columns([1, 2])
         with col_com_a:
-            st.caption("Faturado YTD por Canal")
+            st.caption("Faturado YTD por Canal (convertido p/ BRL)")
             st.dataframe(
-                df_com_canal_ytd[["Dimensao", "Valor_Faturado"]]
-                .rename(columns={"Dimensao": "Canal", "Valor_Faturado": "Faturado YTD"})
+                df_com_canal_ytd[["Dimensao", "Valor_BRL"]]
+                .rename(columns={"Dimensao": "Canal", "Valor_BRL": "Faturado YTD"})
                 .style.format({"Faturado YTD": "R$ {:,.0f}"}),
                 width="stretch",
                 hide_index=True,
             )
         with col_com_b:
-            st.bar_chart(df_com_canal_ytd.set_index("Dimensao")["Valor_Faturado"])
+            st.bar_chart(df_com_canal_ytd.set_index("Dimensao")["Valor_BRL"])
 
 st.divider()
 

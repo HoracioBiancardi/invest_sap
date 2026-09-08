@@ -179,6 +179,12 @@ implementação atual colapsou tudo fora de `ZVCO` em "9". Consequência direta 
 `Prioridade_Pedido IN (2,3)`, que **nunca acontece hoje** — é um status morto no código.
 Gap de regra de negócio conhecido, não um bug de SQL.
 
+**Atualização (2026-09-08): a "escala mais fina" original foi encontrada** — não é uma
+regra perdida/a decidir, é código real e ainda presente no schema legado `GOLD.vendas`
+(`dim_pendencia.sql`, confirmado também em `mkdocs/docs/vendas/vendas.md`). Ver
+`docs/REGRAS_E_MELHORIAS_DW.md` §5.1 para a regra completa, os valores reais medidos ao
+vivo (VKORG/AUART) e a proposta de portar para `fct_pendencia_sap`.
+
 ### 6.4 Estoque: `MCH1`/`MCHB` com data `'00000000'`
 `Data_Producao`/`Data_Validade` em `fct_estoque_lote_sap` usam `TRY_CAST` (não `CAST`)
 porque o SAP grava literalmente `'00000000'` quando a data não se aplica ao lote — um
@@ -295,6 +301,40 @@ uma soma calculada de outro jeito, tipo fiz aqui) antes de confiar cegamente num
 funções específicas, principalmente as que já são usadas em decisão (Meta x Realizado,
 Linha de Negócio).
 
+### 6.11 BUG confirmado (2026-09-08): `fct_limite_credito_sap.Valor_Saldo_Vencido`/`Valor_Saldo_A_Vencer` sempre zero
+
+`TRY_CONVERT(DATE, CAST(zfbdt AS VARCHAR(8)), 112)` na CTE de vencimento assume que `zfbdt`
+é string `AAAAMMDD` (convenção SAP crua) — mas na Silver `bsid.zfbdt` já é `DATE`. O `CAST`
+corta a string do formato padrão de data (`'2026-09-13'` → `'2026-09-'`), `TRY_CONVERT` com
+estilo `112` não reconhece isso e retorna `NULL` em toda linha, zerando as duas somas.
+Confirmado ao vivo: `GOLD.vendas_sap.fct_limite_credito_sap` tem 5.189 linhas, 100% com
+`Valor_Saldo_Vencido=0` e `Valor_Saldo_A_Vencer=0`, enquanto `Valor_Exposicao_Total_SAP`
+(campo não afetado, vem direto de `KNKK.SKFOR`) soma R$1,05 bilhão. Correção testada:
+trocar por `DATEADD(DAY, COALESCE(zbd3t,0), zfbdt)` direto (sem `CAST`/`TRY_CONVERT`) — dá
+R$820,95mi de vencido e R$288,45mi de a vencer, valores plausíveis. Falta ainda excluir
+`blart='ZP'` (que sozinho muda "a vencer" em ~8x) — ver `docs/REGRAS_E_MELHORIAS_DW.md`
+§1.2.4/§5.6/§5.7 para o achado completo, os números e a correção. Consumido ao vivo em
+`pages/7_Credito_Devolucoes.py` e `pages/27_Pendencia_x_Estoque.py` — **não confiar nesses 2
+campos até a correção subir em produção**.
+
+### 6.12 BUG confirmado (2026-09-08): `SILVER.dataspherev2.tcurr.gdatu` sempre NULL desde a ingestão (2026-08-25)
+
+Achado ao validar `docs/PROPOSTA_CONVERSAO_CAMBIO_TCURR.md` Parte B com dado real: o model
+Silver `tcurr.sql` usava o macro genérico `{{ to_date('GDATU') }}` (=
+`TRY_CONVERT(DATE, GDATU)`), que tenta interpretar `GDATU` como uma data direta — mas o SAP
+grava esse campo **invertido** (`GDATU = 99999999 - AAAAMMDD`, ver §1.7.2). Sem decodificar
+antes, `TRY_CONVERT` nunca reconhece o número e retorna `NULL` — **100% das ~65 mil linhas**
+ficavam sem data, inutilizando qualquer lookup de taxa por período (a tabela existe e tem
+`UKURS` correto, só a chave de tempo estava quebrada). Passou despercebido desde a ingestão
+original porque nenhum model Gold consumia `tcurr` ainda (só existia pra suportar uma
+proposta futura).
+
+Corrigido decodificando explicitamente (`TRY_CONVERT(DATE, CAST(99999999 - TRY_CAST(GDATU AS
+INT) AS VARCHAR(8)), 112)`) antes de qualquer conversão. Confirmado com dado real: USD/BRL
+sai em ~5,10-5,13 pra datas de set/2026. Ver `docs/PROPOSTA_CONVERSAO_CAMBIO_TCURR.md` e
+`docs/REGRAS_E_MELHORIAS_DW.md` §5.11 para a implementação completa da conversão BRL nos
+models multi-moeda.
+
 ## 7. Como conectar (produção) — conceitos
 
 Duas origens de dados, credenciais no `.env` (nunca commitar valores, nunca colar em
@@ -354,16 +394,27 @@ não tem equivalente, úteis pra duas coisas específicas:
   e NÃO ALOCADO ao mesmo tempo. Ver `scripts/query_vendas_sap.py::faturamento_por_org_vendas_linha_negocio`.
 - **Motivo de crédito/devolução em texto livre** — `vendas.dim_credito_devolucoes.Texto`
   (~93% de cobertura) tem o texto que o financeiro registrou no lançamento (ex.: "SALDO NF
-  000064142-2", "ACORDO CONFISSÃO DE DIVIDA - 24 PARCELAS", "DESCONTOS CONC..."). A tabela
-  equivalente em `vendas_sap` (`fct_credito_devolucoes_sap`) **não tem** esse campo — só
-  código de tipo de documento (`Tipo_Documento_Contabil`: RV/AB/DR/DG/DZ/LM/DA/EX/SA) e
-  conta contábil, sem texto. `Tp_doc = 'RV'` é o mais comum (>95% das linhas) e é só
-  transferência de documento de faturamento de rotina (texto sempre "Transf.docs.faturam.
-  ..."), não é devolução/abatimento de negócio de fato — vale excluir por padrão.
-  Os códigos de `Tp_doc` não têm tradução pra texto disponível nesta base (a tabela SAP
-  `T003T`, de descrição de tipo de documento, existe no DDIC mas não está replicada como
-  dado no HANA/`IB_SAPECC` — só a definição de estrutura, sem linhas). Ver
-  `scripts/query_vendas_sap.py::devolucoes_credito_motivo`.
+  000064142-2", "ACORDO CONFISSÃO DE DIVIDA - 24 PARCELAS", "DESCONTOS CONC...").
+  **Correção (2026-09-05, validação de docs)**: a afirmação abaixo de que a tabela
+  equivalente em `vendas_sap` não teria texto livre estava **errada**, não só desatualizada
+  — reconferido ao vivo, `fct_credito_devolucoes_sap` **tem** a coluna `Texto_Motivo`,
+  populada em **93,7%** das linhas (23.325/24.890), com o mesmo tipo de conteúdo (ex.:
+  "Transf.docs.faturam. LATINO AME 90288828" pras linhas `RV`). **Migrado em 2026-09-05**:
+  `scripts/query_vendas_sap.py::devolucoes_credito_motivo` agora lê
+  `fct_credito_devolucoes_sap.Texto_Motivo` diretamente (não precisa mais do schema `vendas`
+  legado pra esse propósito), e passou a expor `Montante` com o **sinal contábil real do SAP**
+  (`Indicador_Debito_Credito`: `S`=débito positivo, `H`=crédito negativo) em vez do valor
+  absoluto que o legado usava — decisão deliberada do usuário, ver docstring da função pro
+  detalhe de como isso muda o significado de uma soma agregada (vira posição líquida, não
+  total bruto).
+  `Tipo_Documento_Contabil` (RV/AB/DR/DG/DZ/LM/DA/EX/SA) continua sem tradução de código pra
+  texto oficial nesta base (a tabela SAP `T003T` existe no DDIC mas não estava replicada como
+  dado — isso já mudou, ver `PROPOSTA_INGESTAO_CREDITO_E_MESTRES_SAP.md` Parte C e
+  `REGRAS_E_MELHORIAS_DW.md` §4.9: `T003T` foi liberada e confirmada com dado real em
+  2026-09-05). `Tp_doc = 'RV'` é o mais comum — medido ao vivo: **91,8%** das linhas
+  (22.846/24.890, não ">95%") — e é só transferência de documento de faturamento de rotina
+  (texto sempre "Transf.docs.faturam. ..."), não é devolução/abatimento de negócio de fato —
+  vale excluir por padrão. Ver `scripts/query_vendas_sap.py::devolucoes_credito_motivo`.
 
 ## 8.2 Investigação: existe um `dim_estrutura` nativo (SAP ou Salesforce) pra substituir o crosswalk manual da Linha de Negócio?
 
@@ -417,7 +468,8 @@ Implementado em `scripts/query_vendas_sap.py::faturamento_por_org_vendas_linha_n
 como camada de fallback (só preenche quando não há match manual), expondo
 `Origem_Linha_Negocio` (`MANUAL`/`HEURISTICA_PRODUTO`/`NAO_ALOCADO`) pra quem consumir o
 dado poder filtrar só o confirmado quando precisar de precisão em vez de cobertura —
-exibido também em `pages/8_Faturamento_Org_Vendas.py`.
+exibido também em `pages/22_Faturamento.py` (reorganização de 2026-09-05 — antiga
+`pages/8_Faturamento_Org_Vendas.py` foi absorvida por ela, ver `COMO_RODAR.md` §9).
 
 ## 8.3 `GOLD.vendas.fat_meta_equipe` — meta comercial (planejamento, não transação)
 
@@ -484,9 +536,28 @@ alternativa, ver §8.3) e pras tabelas de crosswalk/dimensão já estabelecidas 
 **medida** de faturamento. Motivo: `fat_faturamento` competia diretamente com
 `vendas_sap.fct_faturamento_itens_sap` como "o" número de faturamento do app, e as duas
 tabelas não reconciliam entre si — ter 2 fontes de faturamento independentes no mesmo app é
-pior do que ter 1 só que não bate com um painel externo. **Consequência aceita**: as páginas
-de Faturamento (Painel Vendas) **não batem mais** com os números exatos do PDF de
-referência — servem pra estrutura/navegação equivalente, não reconciliação numérica.
+pior do que ter 1 só que não bate com um painel externo. **Consequência aceita** (na época):
+as páginas de Faturamento (Painel Vendas) **não bateriam mais** com os números exatos do PDF
+de referência — serviriam pra estrutura/navegação equivalente, não reconciliação numérica.
+
+**Atualização 2026-09-04** — parte dessa "consequência aceita" foi resolvida, não só
+documentada: a diferença de R$ 2,43 bi vs R$ 1,04 bi acima **não era só decisão de produto,
+era literalmente somar 5 moedas (BRL/UYU/COP/USD/CLP) como se fossem reais** — o mesmo tipo
+de bug achado (e corrigido) no backlog (`fct_pendencia_sap`, ver achado de moeda logo
+abaixo). Decisão do usuário desta vez: em vez de restringir a `Moeda='BRL'` (que subestimaria
+receita real em moeda estrangeira), implementar conversão de verdade usando `TCURR` (taxa de
+câmbio real do SAP, achada ao vivo no HANA — 65.398 linhas, cobertura boa desde 2018 pra
+USD/UYU e desde 2025-07 pra COP; CLP não tem taxa real, só placeholder). Implementado em
+`scripts/query_vendas_sap.py::taxas_cambio_brl`/`converter_para_brl` (consulta HANA + `pandas
+merge_asof`, taxa mais próxima da data de cada linha) e no helper de UI
+`scripts/ui_theme.py::render_valor_convertido_brl` (mostra o total convertido, com a quebra
+por moeda original atrás de um `st.expander`). Aplicado em `0_Home.py`, `12_Painel_Vendas.py`,
+`22_Faturamento.py` e nas duas funções de Meta x Realizado — o resto do app (Vendedor,
+Produto\|Cliente, Cliente 360, Oportunidade, backlog) ainda usa o padrão anterior (moeda
+separada, visível, não convertida). Isso é um contorno de app (consulta HANA ao vivo +
+conversão em pandas, com aproximação de "taxa do meio do período" nas consultas que agregam
+sem grão de data) — a correção de verdade é levar `TCURR` pro Data Warehouse, ver
+**`docs/PROPOSTA_CONVERSAO_CAMBIO_TCURR.md`**.
 
 ### 10.1 Versão atual: `vendas_sap.fct_faturamento_itens_sap` + crosswalk
 
@@ -523,10 +594,20 @@ faturamento real associado (achado original da investigação, ainda válido).
 - **Não compare com um Painel Vendas externo** — os números aqui não batem mais 1:1 com o
   PDF de referência (ver §10.0). Servem pra navegação/estrutura equivalente e pra métrica
   internamente consistente com o resto do app, não pra reconciliar com aquele painel.
-- **Meta** (`vendas.fat_meta_equipe`) não tem o ajuste de MS: seu `cod_setor` de "Publico"
-  não separa o cliente Ministério da Saúde do resto — Meta de Canal='MS' aparece sempre
-  0/NULL nas páginas de Meta x Realizado. Não é ausência de dado, é que a meta orçamentária
-  nunca segmentou esse cliente à parte.
+- **Meta (correção, 2026-09-05)**: a afirmação de que `vendas.fat_meta_equipe` nunca
+  segmentaria o canal MS estava **errada** — `vendas.dim_estrutura` tem nós `MS` nativos,
+  simétricos aos de "Publico" (`701000000`=ONCO/HEMATO-MS, `702000000`=FARMA-MS,
+  `703000000`=AESTHETICS-MS, espelhando `601/602/603000000`=Publico), e
+  `vendas.fat_meta_equipe` **tem** 87 linhas com `bu='MS'` sob `cod_setor=701000000`,
+  somando **R$85,3 milhões** de meta em 2025. Ressalva real só parcial: `702000000`
+  (FARMA-MS) e `703000000` (AESTHETICS-MS) não têm nenhuma linha de meta — só o braço
+  ONCO/HEMATO segmenta MS hoje. **Confirmado na tela**: `scripts/query_faturamento_comercial.py::
+  meta_vs_realizado_por_dimensao(dimensao='Canal')` já reconhece esses nós (`e.descricao LIKE
+  '% - MS'` em `_par_expr_meta`) e retorna `Meta_Valor` real e não-zero pro Canal='MS' na
+  maioria dos meses de 2025 (ex.: R$59,6mi em março/2025, vs. R$54,8mi de Realizado) — as
+  páginas `pages/12_Painel_Vendas.py`/`pages/11_Metas.py` já mostram isso corretamente hoje,
+  não precisa de nenhuma correção de código. Só alguns meses esparsos (maio/out/nov de 2025)
+  não têm meta cadastrada pra MS — dado de planejamento incompleto, não bug.
 - **"Produto"** (`valores_dimensao`) é restrito a materiais com pelo menos 1 fatura no
   histórico (~1.700), não o cadastro completo de `dim_material_sap` (~80 mil, na maioria
   matéria-prima/embalagem nunca faturada a cliente — inviável num filtro).

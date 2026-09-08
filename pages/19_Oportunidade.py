@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.query_vendas_sap import correlacao_oportunidade_pedido_pendencia_fatura  # noqa: E402
 from scripts.ui_filtros_executivo import render_filtros_executivo  # noqa: E402
-from scripts.ui_theme import card, render_filtro_periodo_tipo_cliente  # noqa: E402
+from scripts.ui_theme import card, render_filtro_periodo_tipo_cliente, render_valor_por_moeda  # noqa: E402
 
 st.set_page_config(page_title="Oportunidade — Vendas SAP", page_icon="🎯", layout="wide")
 st.title(":material/target: Oportunidade")
@@ -80,6 +80,14 @@ else:
     df_opp = df[df["Nome_Oportunidade"].notna()].copy()
     opp_dedup = df_opp.drop_duplicates(subset=["Nome_Oportunidade", "Data_Criacao_Oportunidade"])
 
+    # Achado 2026-09-04: o org Salesforce também é multi-moeda (BRL/COP/UYU/EUR em
+    # Opportunity.currency_iso_code, confirmado ao vivo) — Valor_Oportunidade some por moeda
+    # separada abaixo (funil/ganha/aging restritos a BRL, a esmagadora maioria do pipeline).
+    if not opp_dedup.empty and (opp_dedup["Moeda_Oportunidade"] != "BRL").any():
+        st.caption("Valor de Oportunidade (deduplicado), por moeda:")
+        render_valor_por_moeda(opp_dedup, "Valor_Oportunidade", moeda_col="Moeda_Oportunidade")
+    opp_dedup_brl = opp_dedup[opp_dedup["Moeda_Oportunidade"] == "BRL"]
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Pedidos+Item no período", f"{len(df):,}")
     c2.metric("% com Oportunidade vinculada", f"{len(df_opp) / len(df):.0%}")
@@ -102,19 +110,42 @@ else:
         )
 
         with tab_funil:
-            funil_estagio = opp_dedup.groupby("Estagio_Oportunidade", dropna=False).agg(
-                Qtd_Oportunidades=("Nome_Oportunidade", "count"),
-                Valor_Oportunidade=("Valor_Oportunidade", "sum"),
-            ).sort_values("Valor_Oportunidade", ascending=False)
+            st.caption(
+                "`Estagio_Oportunidade` é o `stage_name` cru do Salesforce — inclui estágios "
+                "de aprovação de licitação/governo (Em Aprovação, Aprovado, Reprovado, "
+                "Recusado 1º/2º nível, Parcialmente Ganha, ...) misturados com o funil padrão "
+                "de venda privada (Ganha/Perdida) — são 2 fluxos de negócio diferentes no "
+                "mesmo campo, não dá pra tratar como 1 funil único. `% Em Aberto` = fração "
+                "daquele estágio ainda sem `Data_Fechamento_Oportunidade` (nem ganha nem "
+                "perdida/recusada) — é o jeito de achar estágio de aprovação parada/represada."
+            )
+            funil_estagio = (
+                opp_dedup_brl.assign(
+                    Em_Aberto=opp_dedup_brl["Data_Fechamento_Oportunidade"].isna()
+                )
+                .groupby("Estagio_Oportunidade", dropna=False)
+                .agg(
+                    Qtd_Oportunidades=("Nome_Oportunidade", "count"),
+                    Valor_Oportunidade=("Valor_Oportunidade", "sum"),
+                    Pct_Em_Aberto=("Em_Aberto", "mean"),
+                )
+                .sort_values("Qtd_Oportunidades", ascending=False)
+            )
             with card("oportunidade-funil-estagio"):
-                col_a, col_b = st.columns([1, 1])
-                with col_a:
-                    st.bar_chart(funil_estagio["Qtd_Oportunidades"])
-                with col_b:
-                    st.dataframe(
-                        funil_estagio.style.format({"Valor_Oportunidade": "R$ {:,.2f}"}),
-                        width="stretch",
-                    )
+                st.bar_chart(funil_estagio["Qtd_Oportunidades"])
+                st.dataframe(
+                    funil_estagio.reset_index(),
+                    width="stretch",
+                    hide_index=True,
+                    column_config={
+                        "Valor_Oportunidade": st.column_config.NumberColumn(
+                            "Valor_Oportunidade", format="R$ %,.0f"
+                        ),
+                        "Pct_Em_Aberto": st.column_config.NumberColumn(
+                            "% Em Aberto", format="percent"
+                        ),
+                    },
+                )
 
             dt_criacao_opp = pd.to_datetime(
                 df_opp["Data_Criacao_Oportunidade"], utc=True, errors="coerce"
@@ -137,7 +168,7 @@ else:
             )
 
         with tab_ganha:
-            resumo_ganha = opp_dedup.groupby("Oportunidade_Ganha", dropna=False).agg(
+            resumo_ganha = opp_dedup_brl.groupby("Oportunidade_Ganha", dropna=False).agg(
                 Qtd_Oportunidades=("Nome_Oportunidade", "count"),
                 Valor_Oportunidade=("Valor_Oportunidade", "sum"),
             )
@@ -157,7 +188,7 @@ else:
                 "Oportunidade sem `Data_Fechamento_Oportunidade` — ainda em aberto no "
                 "Salesforce. Dias contados a partir de `Data_Criacao_Oportunidade`."
             )
-            abertas = opp_dedup[opp_dedup["Data_Fechamento_Oportunidade"].isna()].copy()
+            abertas = opp_dedup_brl[opp_dedup_brl["Data_Fechamento_Oportunidade"].isna()].copy()
             if abertas.empty:
                 st.info("Nenhuma Oportunidade em aberto nesse filtro.")
             else:
@@ -199,15 +230,20 @@ else:
                 st.metric(f"Linhas com divergência ≥ {limite_pct}%", f"{len(df_div_filtrado)} de {len(df_div)}")
                 colunas_div = [
                     "Numero_Pedido", "Item_Pedido", "Nome_Cliente", "Nome_Oportunidade",
-                    "Valor_Item_Oportunidade", "Valor_Liquido_Pedido", "Diferenca", "Diferenca_Pct",
+                    "Moeda", "Valor_Item_Oportunidade", "Valor_Liquido_Pedido", "Diferenca", "Diferenca_Pct",
                 ]
                 with card("oportunidade-divergencia"):
+                    st.caption(
+                        "`Moeda` do pedido SAP ao lado — % de diferença continua válido "
+                        "linha a linha mesmo fora de BRL, mas os valores absolutos não "
+                        "levam \"R$\" fixo (podem ser USD/UYU/COP/EUR)."
+                    )
                     st.dataframe(
                         df_div_filtrado[colunas_div].head(200).style.format(
                             {
-                                "Valor_Item_Oportunidade": "R$ {:,.2f}",
-                                "Valor_Liquido_Pedido": "R$ {:,.2f}",
-                                "Diferenca": "R$ {:,.2f}",
+                                "Valor_Item_Oportunidade": "{:,.2f}",
+                                "Valor_Liquido_Pedido": "{:,.2f}",
+                                "Diferenca": "{:,.2f}",
                                 "Diferenca_Pct": "{:,.1f}%",
                             }
                         ),
@@ -218,8 +254,8 @@ else:
         with tab_detalhe:
             colunas_exibir = [
                 "Numero_Pedido", "Item_Pedido", "Nome_Cliente", "Nome_Oportunidade",
-                "Estagio_Oportunidade", "Oportunidade_Ganha", "Valor_Oportunidade",
-                "Valor_Item_Oportunidade", "Valor_Liquido_Pedido", "Status_Pendencia",
+                "Estagio_Oportunidade", "Oportunidade_Ganha", "Moeda_Oportunidade", "Valor_Oportunidade",
+                "Valor_Item_Oportunidade", "Moeda", "Valor_Liquido_Pedido", "Status_Pendencia",
                 "Status_Faturamento", "Data_Criacao_Oportunidade", "Data_Fechamento_Oportunidade",
             ]
             with card("oportunidade-detalhe"):
