@@ -1703,9 +1703,9 @@ def devolucoes_credito_motivo(
         limit: teto de linhas.
 
     Nota: os códigos de `Tp_doc` (RV, AB, DR, DG, DZ, LM, DA, EX, SA) não têm tradução pra
-    texto oficial disponível nesta base ainda (a tabela SAP `T003T` já foi confirmada com
-    dado real no HANA, mas a ingestão formal pro DW não foi feita — ver
-    docs/PROPOSTA_INGESTAO_CREDITO_E_MESTRES_SAP.md Parte C) — use o campo `Texto` como
+    texto oficial disponível nesta base ainda (a ingestão da tabela SAP `T003T` já foi
+    implementada em data-platform, mas `Descricao_Tipo_Documento_Contabil` ainda não tem
+    dado real até a extração Bronze→Silver rodar em produção) — use o campo `Texto` como
     motivo legível; `Tp_doc` fica só como código de apoio.
     """
     if data_fim is None:

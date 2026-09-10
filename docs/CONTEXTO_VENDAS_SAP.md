@@ -319,7 +319,7 @@ campos até a correção subir em produção**.
 
 ### 6.12 BUG confirmado (2026-09-08): `SILVER.dataspherev2.tcurr.gdatu` sempre NULL desde a ingestão (2026-08-25)
 
-Achado ao validar `docs/PROPOSTA_CONVERSAO_CAMBIO_TCURR.md` Parte B com dado real: o model
+Achado ao validar a Parte B da proposta de conversão de câmbio TCURR com dado real: o model
 Silver `tcurr.sql` usava o macro genérico `{{ to_date('GDATU') }}` (=
 `TRY_CONVERT(DATE, GDATU)`), que tenta interpretar `GDATU` como uma data direta — mas o SAP
 grava esse campo **invertido** (`GDATU = 99999999 - AAAAMMDD`, ver §1.7.2). Sem decodificar
@@ -331,9 +331,9 @@ proposta futura).
 
 Corrigido decodificando explicitamente (`TRY_CONVERT(DATE, CAST(99999999 - TRY_CAST(GDATU AS
 INT) AS VARCHAR(8)), 112)`) antes de qualquer conversão. Confirmado com dado real: USD/BRL
-sai em ~5,10-5,13 pra datas de set/2026. Ver `docs/PROPOSTA_CONVERSAO_CAMBIO_TCURR.md` e
-`docs/REGRAS_E_MELHORIAS_DW.md` §5.11 para a implementação completa da conversão BRL nos
-models multi-moeda.
+sai em ~5,10-5,13 pra datas de set/2026. Ver `docs/REGRAS_E_MELHORIAS_DW.md` §2.1/§5.11 para a
+implementação completa da conversão BRL nos models multi-moeda (implementada e mergeada em
+`origin/main` do `data-platform`).
 
 ## 7. Como conectar (produção) — conceitos
 
@@ -408,10 +408,9 @@ não tem equivalente, úteis pra duas coisas específicas:
   detalhe de como isso muda o significado de uma soma agregada (vira posição líquida, não
   total bruto).
   `Tipo_Documento_Contabil` (RV/AB/DR/DG/DZ/LM/DA/EX/SA) continua sem tradução de código pra
-  texto oficial nesta base (a tabela SAP `T003T` existe no DDIC mas não estava replicada como
-  dado — isso já mudou, ver `PROPOSTA_INGESTAO_CREDITO_E_MESTRES_SAP.md` Parte C e
-  `REGRAS_E_MELHORIAS_DW.md` §4.9: `T003T` foi liberada e confirmada com dado real em
-  2026-09-05). `Tp_doc = 'RV'` é o mais comum — medido ao vivo: **91,8%** das linhas
+  texto oficial nesta base (a ingestão de `T003T` já foi implementada em `data-platform`, ver
+  `REGRAS_E_MELHORIAS_DW.md` §2.3/§5.11, mas `Descricao_Tipo_Documento_Contabil` ainda não
+  tem dado real até a extração Bronze→Silver rodar em produção). `Tp_doc = 'RV'` é o mais comum — medido ao vivo: **91,8%** das linhas
   (22.846/24.890, não ">95%") — e é só transferência de documento de faturamento de rotina
   (texto sempre "Transf.docs.faturam. ..."), não é devolução/abatimento de negócio de fato —
   vale excluir por padrão. Ver `scripts/query_vendas_sap.py::devolucoes_credito_motivo`.
@@ -556,8 +555,9 @@ por moeda original atrás de um `st.expander`). Aplicado em `0_Home.py`, `12_Pai
 Produto\|Cliente, Cliente 360, Oportunidade, backlog) ainda usa o padrão anterior (moeda
 separada, visível, não convertida). Isso é um contorno de app (consulta HANA ao vivo +
 conversão em pandas, com aproximação de "taxa do meio do período" nas consultas que agregam
-sem grão de data) — a correção de verdade é levar `TCURR` pro Data Warehouse, ver
-**`docs/PROPOSTA_CONVERSAO_CAMBIO_TCURR.md`**.
+sem grão de data) — a correção de verdade era levar `TCURR` pro Data Warehouse, já feita
+(ver `docs/REGRAS_E_MELHORIAS_DW.md` §2.1/§5.11); falta o app trocar as consultas ao vivo
+restantes pra ler a conversão já pronta na Silver/Gold.
 
 ### 10.1 Versão atual: `vendas_sap.fct_faturamento_itens_sap` + crosswalk
 
@@ -661,12 +661,12 @@ histórico).
 - **Séries temporais de estoque** (mês a mês) pra material/família, sem precisar reconstruir
   nada — é só agrupar por período.
 
-**Se o uso crescer**: candidato a ingestão formal (`data-platform`) — deixaria essas
-consultas em GOLD normal em vez de HANA ao vivo (mais rápido, sem depender de VPN). Spec
-completa (config de Bronze, SQL dos 2 models Silver, schema real de `MCHBH`/`MBEWH`
-verificado ao vivo) em **`docs/PROPOSTA_INGESTAO_MOVIMENTO_ESTOQUE.md`** (Parte A).
+**Atualização**: a ingestão de `MCHBH`/`MBEWH` (Parte A) já foi implementada em
+`data-platform` (ver `docs/REGRAS_E_MELHORIAS_DW.md` §2.2/§5.11) — ainda sem dado real até a
+extração Bronze→Silver rodar em produção, e sem model Gold novo consumindo essas tabelas
+ainda (o app segue lendo HANA ao vivo por enquanto).
 
-### 11.2 Proposta (não construída): `fct_movimento_lote_sap` — histórico de movimento por lote
+### 11.2 `fct_movimento_lote_sap` — implementado e validado — histórico de movimento por lote
 
 Nenhuma tabela GOLD guarda hoje a timeline de eventos de um lote (produção → transferência →
 qualidade → liberação → venda) — só o estado atual (`fct_estoque_lote_sap`, sem histórico) ou
@@ -675,6 +675,7 @@ dashboard (`scripts/trace_lote.py::trace_lote()`) hoje resolve isso lendo
 `SILVER.dataspherev2.mseg`/`mkpf` direto, sem passar por GOLD — funciona, mas é uma consulta
 ad hoc de app, não um model reutilizável por outros dashboards/relatórios.
 
-Design completo (grão, campos, casos de uso, nota de performance/volume) em
-**`docs/PROPOSTA_INGESTAO_MOVIMENTO_ESTOQUE.md`** (Parte B) — não depende da Parte A, a
-fonte (`mseg`/`mkpf`) já está ingerida.
+Implementado e mergeado em `origin/main` do `data-platform` em 2026-09-08 (commit `ac897d2f`)
+— não dependeu da Parte A, a fonte (`mseg`/`mkpf`) já estava ingerida. Validado com dado real:
+2.523.686 linhas com lote preenchido, movimentos do dia presentes e consistentes. Detalhe em
+`docs/REGRAS_E_MELHORIAS_DW.md` §2.2/§5.11.

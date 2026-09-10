@@ -2,10 +2,12 @@
 
 > Documento consolidado pra levar ao time de dados (`data-platform`). Reúne (1) as regras de
 > negócio/gotchas que **já existem hoje** e qualquer consumidor do DW precisa conhecer antes
-> de confiar num número, e (2) melhorias propostas — as 3 specs já formalizadas
-> (`PROPOSTA_CONVERSAO_CAMBIO_TCURR.md`, `PROPOSTA_INGESTAO_MOVIMENTO_ESTOQUE.md`,
-> `PROPOSTA_INGESTAO_CREDITO_E_MESTRES_SAP.md`) mais um conjunto novo de propostas que ainda
-> não tinham virado documento, levantadas ao construir e usar o dashboard `invest_sap`.
+> de confiar num número, e (2) melhorias propostas — as 3 specs formalizadas (câmbio TCURR,
+> ingestão de movimento de estoque, ingestão de crédito e mestres SAP) já foram implementadas
+> e mergeadas em `origin/main` do `data-platform` (2026-09-08/09, ver §5.11); os arquivos
+> `PROPOSTA_*.md` correspondentes foram removidos deste repo em 2026-09-09 por não serem mais
+> necessários — mais um conjunto novo de propostas que ainda não tinham virado documento,
+> levantadas ao construir e usar o dashboard `invest_sap`.
 >
 > Fonte: `docs/CONTEXTO_VENDAS_SAP.md` (arquitetura completa), `docs/INVESTIGACAO_PENDENCIA_SAP.md`
 > (achado `KWMENG=0`) e achados registrados durante o uso do app entre 2026-08-13 e
@@ -94,36 +96,41 @@
 | # | Regra | Por quê |
 |---|---|---|
 | 1.7.1 | Campos de aging (`Dias_Desde_Inclusao_Pedido`, `Dias_Aging_Credito`, `Data_Processamento_DW`) usam **BRT explícito** (`AT TIME ZONE`) desde 2026-08-13, não horário de servidor implícito — se um número parecer "off by 3h", checar se o model já foi migrado. | `CONTEXTO_VENDAS_SAP.md` §6.6. |
-| 1.7.2 | **`TCURR.GDATU` vem invertido** (`GDATU = 99999999 - AAAAMMDD`) — qualquer consumo direto (fora da Silver já decodificada, se a proposta §2.1 for implementada) precisa decodificar isso antes de usar como data. | `PROPOSTA_CONVERSAO_CAMBIO_TCURR.md` A.2. |
+| 1.7.2 | **`TCURR.GDATU` vem invertido** (`GDATU = 99999999 - AAAAMMDD`) — corrigido na decodificação da Silver junto com a implementação da §2.1 (ver §5.11); qualquer consumo direto fora da Silver já decodificada ainda precisa decodificar isso antes de usar como data. | §2.1/§5.11. |
 
 ---
 
-## 2. Melhorias já propostas (spec completa em documento separado)
+## 2. Melhorias já propostas — **implementadas, spec removida** (ver §5.11)
 
-Resumidas aqui só pra dar visão consolidada — a spec real (config de pipeline, SQL de model,
-schema de campo) está nos documentos linkados.
+As 3 specs abaixo foram implementadas e mergeadas em `origin/main` do `data-platform`
+(commits `64509e2e`/`ac897d2f`, 2026-09-08, merge pra `main` confirmado em 2026-09-09) —
+resumo mantido aqui por contexto histórico, mas os documentos `PROPOSTA_*.md` originais
+(config de pipeline, SQL de model, schema de campo) foram apagados deste repo em 2026-09-09
+por já não serem mais necessários. Status de validação com dado real por peça em §5.11.
 
-### 2.1 `docs/PROPOSTA_CONVERSAO_CAMBIO_TCURR.md`
-Ingerir `IB_SAPECC.TCURR` (Bronze+Silver) e ligar conversão pra BRL nos 3 models multi-moeda
+### 2.1 Conversão de câmbio (`TCURR`) — implementado e validado
+Ingeriu `IB_SAPECC.TCURR` (Bronze+Silver) e ligou conversão pra BRL nos 3 models multi-moeda
 (`fct_faturamento_itens_sap`, `fct_vendas_itens_sap`, `fct_pendencia_sap`), resolvendo a regra
 1.5.1/1.3.2 dentro do DW em vez de round-trip ao HANA no app a cada carregamento de página.
 
-### 2.2 `docs/PROPOSTA_INGESTAO_MOVIMENTO_ESTOQUE.md`
-- **Parte A**: ingerir `MCHBH`/`MBEWH` (Bronze+Silver) — resolve a regra 1.3.5 (estoque
-  histórico real) dentro do DW.
+### 2.2 Movimento de estoque (`MCHBH`/`MBEWH` + `fct_movimento_lote_sap`) — implementado
+- **Parte A**: ingeriu `MCHBH`/`MBEWH` (Bronze+Silver) — resolve a regra 1.3.5 (estoque
+  histórico real) dentro do DW. Implementada, ainda sem validação de dado real.
 - **Parte B**: novo model `fct_movimento_lote_sap` (timeline de movimento por lote, via
-  `mseg`/`mkpf`, já ingeridos) — hoje é consulta ad hoc de app (`scripts/trace_lote.py`).
+  `mseg`/`mkpf`, já ingeridos) — antes era consulta ad hoc de app (`scripts/trace_lote.py`).
+  Implementada e validada com dado real (2,52 milhões de linhas).
 
-### 2.3 `docs/PROPOSTA_INGESTAO_CREDITO_E_MESTRES_SAP.md`
+### 2.3 Crédito e mestres SAP (`VBUK`/`T001K`/`T003T`) — implementado
 Nasceu direto da investigação da seção 4 abaixo (não é achado anterior, é a formalização dos
 3 achados que precisam de ingestão nova, vs. os que só precisam de SELECT em tabela já
-ingerida — ver a árvore de decisão no início da seção 4). 3 peças independentes:
-- **Parte A**: ingerir `VBUK` (Bronze+Silver) — expõe `Status_Credito_Documento_SAP`
+ingerida — ver a árvore de decisão no início da seção 4). 3 peças independentes, todas
+implementadas, nenhuma validada com dado real ainda:
+- **Parte A**: ingeriu `VBUK` (Bronze+Silver) — expõe `Status_Credito_Documento_SAP`
   (`CMGST`, achado §4.1) por pedido, mais preciso que a regra 1.2.1 atual.
-- **Parte B**: ingerir `T001K` (Bronze+Silver) — de-para oficial centro→empresa→moeda
-  (achado §4.9), substitui a heurística `Pais_Centro` e destrava a Parte B de
-  `PROPOSTA_CONVERSAO_CAMBIO_TCURR.md` com dado real.
-- **Parte C**: ingerir `T003T` (Bronze+Silver) — texto de tipo de documento contábil (regra
+- **Parte B**: ingeriu `T001K` (Bronze+Silver) — de-para oficial centro→empresa→moeda
+  (achado §4.9), substitui a heurística `Pais_Centro` e destrava a conversão de câmbio
+  (§2.1) com dado real.
+- **Parte C**: ingeriu `T003T` (Bronze+Silver) — texto de tipo de documento contábil (regra
   1.2.3/proposta 3.8), resolve o bloqueio que a proposta 3.8 tinha registrado.
 
 ---
@@ -340,12 +347,11 @@ precisar de heurística. `D` (128 mil) é um achado colateral interessante: volu
 pedidos que passaram por bloqueio e foram liberados manualmente pelo responsável de crédito —
 sinal de fricção de processo, não é bug.
 
-**Proposta (substitui/reforça a 3.5)**: ingerir `VBUK` (Bronze+Silver, mesmo padrão das
-propostas já formalizadas) e expor `CMGST`/texto em `fct_pendencia_sap` ou
-`fct_limite_credito_sap` como `Status_Credito_Documento_SAP` — sinal por **pedido**, mais
-granular que o limite de crédito por cliente (`fct_limite_credito_sap`, que é por
-cliente+área de crédito, não por pedido individual). Esforço: médio (Bronze+Silver novos,
-igual ao padrão de `PROPOSTA_INGESTAO_MOVIMENTO_ESTOQUE.md`). Dono: time de dados.
+**Proposta (substitui/reforça a 3.5) — implementada, ver §2.3/§5.11**: ingerir `VBUK`
+(Bronze+Silver) e expor `CMGST`/texto em `fct_pendencia_sap` ou `fct_limite_credito_sap` como
+`Status_Credito_Documento_SAP` — sinal por **pedido**, mais granular que o limite de crédito
+por cliente (`fct_limite_credito_sap`, que é por cliente+área de crédito, não por pedido
+individual). Dono: time de dados.
 
 ### 4.2 `VBAP.LPRIO` — prioridade de entrega nativa por item (resolve a decisão da 3.6)
 
@@ -588,8 +594,8 @@ novo no mesmo dia. Confirma que era mesmo um problema de escopo de exposição, 
 permissão/nome — 4 das 5 vieram com dado real e útil:
 
 **`T001K` — achado forte, fecha o gap de moeda por centro do §6.9(2)/regra 1.3.2.** O
-de-para formal `BWKEY→BUKRS` que a investigação de câmbio (`PROPOSTA_CONVERSAO_CAMBIO_TCURR.md`)
-registrou como "não replicado, mapeamento usa heurística `Pais_Centro`" **agora existe e bate
+de-para formal `BWKEY→BUKRS` que a investigação de câmbio (§2.1) registrou como "não
+replicado, mapeamento usa heurística `Pais_Centro`" **agora existe e bate
 exatamente com a heurística nos centros já conhecidos** (BR: 1000-1900/2200/2300/2350/R100;
 Uruguai (`UR01`, UYU): 2000/2100/2400/2500/2600/2700; Colômbia (`CO10`, COP): `CO10`) — mas
 revela **2 empresas do grupo não documentadas antes**: `BG01`/`BG02` ("Bergamo
@@ -1349,11 +1355,12 @@ Todos os commits, incluindo estes 2, ficam na mesma branch
   de ingestão (§5).
 - `docs/INVESTIGACAO_PENDENCIA_SAP.md` — achado `KWMENG=0`, correção aplicada, auditoria do
   fluxo.
-- `docs/PROPOSTA_CONVERSAO_CAMBIO_TCURR.md` — spec de ingestão de câmbio.
-- `docs/PROPOSTA_INGESTAO_MOVIMENTO_ESTOQUE.md` — spec de ingestão de estoque histórico e
-  novo model de movimento de lote.
-- `docs/PROPOSTA_INGESTAO_CREDITO_E_MESTRES_SAP.md` — spec de ingestão de `VBUK` (crédito
-  nativo), `T001K` (moeda por centro) e `T003T` (texto de tipo de documento).
+- Specs de câmbio (`TCURR`), movimento de estoque (`MCHBH`/`MBEWH`/`fct_movimento_lote_sap`)
+  e crédito/mestres SAP (`VBUK`/`T001K`/`T003T`) — implementadas e mergeadas em `origin/main`
+  do `data-platform` (§2, §5.11); os documentos `PROPOSTA_*.md` originais foram removidos
+  deste repo em 2026-09-09, conteúdo histórico só no git log.
+- `docs/PROPOSTA_CORRECAO_SINAL_FATURAMENTO_SAP.md` — spec ainda em aberto (patch não
+  aplicado) pra corrigir o sinal de `Valor_Liquido_Faturamento` em notas de crédito/estorno.
 - `docs/COMO_RODAR.md` — como conectar/rodar os scripts citados.
 - Investigação ao vivo do §4 (2026-09-05): `scripts/ddic_lookup.py` (DDIC) + `read_hana_sql()`
   direto em `IB_SAPECC`, mesma conexão de `scripts/trace_pedido.py`/`trace_lote.py` — queries

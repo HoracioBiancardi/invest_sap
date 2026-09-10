@@ -115,10 +115,10 @@ with tab_devolucao:
 
         st.subheader("Por tipo de documento (código SAP)")
         st.caption(
-            "Sem tradução oficial pra esses códigos na tela ainda (T003T já foi confirmada com "
-            "dado real no HANA, mas a ingestão formal pro DW não foi feita, ver "
-            "docs/PROPOSTA_INGESTAO_CREDITO_E_MESTRES_SAP.md Parte C) — use o texto de motivo na "
-            "tabela abaixo, que é bem mais informativo."
+            "Sem tradução oficial pra esses códigos na tela ainda (a ingestão de T003T já foi "
+            "implementada em data-platform, mas Descricao_Tipo_Documento_Contabil ainda não tem "
+            "dado real até a extração Bronze→Silver rodar em produção) — use o texto de motivo "
+            "na tabela abaixo, que é bem mais informativo."
         )
         with card("credito-devolucao-tipo-doc"):
             st.bar_chart(df_dev.groupby("Tp_doc")["Montante"].sum())
