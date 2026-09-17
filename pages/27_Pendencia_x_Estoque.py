@@ -1,19 +1,21 @@
 """Página: Pendência x Estoque — visão global, todos os materiais/pedidos de uma vez.
 
-Classifica cada item de backlog aberto num `Motivo_Principal` real (Falso Positivo /
-Sem Estoque / Estoque Parcial / Financeiro-Crédito / Fiscal-Faturamento /
-Logístico-Remessa), quebra por Organização de Vendas, e permite clicar em 1 item no
+Classifica cada item de backlog aberto num `Motivo_Principal` real (Sem Estoque /
+Estoque Parcial / Financeiro-Crédito / Fiscal-Faturamento / Logístico-Remessa), quebra
+por Organização de Vendas, e permite clicar em 1 item no
 detalhe pra ver o contexto completo — incluindo o estoque REAL na data do pedido (via
 `IB_SAPECC.MCHBH`, fechamento de período do próprio SAP, não estimativa), pra responder
 "na hora que foi aprovado, tinha estoque ou não?" sem sair da tela.
 
 Achado GRAVE de auditoria (2026-09-03, reportado pelo usuário com pedidos reais
 0000134668/0060008372/0060009216/0060011929 — todos devolução ZREB/ZROB): 52% dos itens
-"pendentes" (84,5% da quantidade) já estão `Flag_Totalmente_Faturado=1` — não são
-backlog real, é `Qtd_Remetida` que nunca é populada nesses tipos de pedido. Ver
-docstring de `pendencia_x_estoque_global` no código-fonte pro mecanismo completo;
-classificados aqui como "Falso Positivo (já faturado)", primeiro na ordem de
-prioridade — nenhum outro motivo é avaliado pra esses itens.
+"pendentes" (84,5% da quantidade) já estavam `Flag_Totalmente_Faturado=1` — não eram
+backlog real, era `Qtd_Remetida` que nunca é populada nesses tipos de pedido.
+**Corrigido na fonte em 2026-09-14** (`fct_pendencia_sap.sql`, commit `b3340021` no
+`data-platform` — ver `docs/REGRAS_E_MELHORIAS_DW.md` §3.1): `Qtd_Pendente_Operacional`
+agora trata `Flag_Totalmente_Faturado=1` como conclusão na própria fonte, então a
+categoria "Falso Positivo (já faturado)" que existia aqui só pra mitigar isso no consumo
+foi removida (validado em produção: 0 itens restantes com esse padrão).
 
 Achado de auditoria (2026-09-03): bloqueio comercial explícito do SAP (VBAK.LIFSK/FAKSK)
 tem só 82 pedidos preenchidos em TODO o histórico da base — não vira categoria aqui por
@@ -124,21 +126,12 @@ def _remessas_pedido_cached(numero_pedido: str) -> pd.DataFrame:
 def _classificar_motivo_principal(row: pd.Series) -> str:
     """Motivo real da pendência, nessa ordem de prioridade (ver docstring do módulo):
 
-    0. Falso Positivo (já faturado): `Flag_Totalmente_Faturado=1` mas `Flag_Pendencia=1`
-       mesmo assim — achado GRAVE de auditoria (2026-09-03, ver docstring de
-       `pendencia_x_estoque_global` no código-fonte): 23.981 dos 46.132 itens pendentes
-       (52%, 84,5% de toda a quantidade pendente) são pedidos JÁ 100% faturados —
-       principalmente devolução (`ZREB`/`ZROB`/`ZRSG`/`ZRES`/...) cujo `Qtd_Remetida`
-       nunca é populado, então `Status_Pendencia_Estoque` fica preso em "sem estoque"
-       pra sempre. Checado ANTES de tudo — nenhum desses itens é backlog real.
     1. Financeiro: cliente bloqueado OU sem limite de crédito (pior caso entre áreas) —
        trava o pedido mesmo que o produto exista em estoque.
     2. Sem Estoque / Estoque Parcial: `Status_Pendencia_Estoque` do próprio item.
     3. Fiscal/Logístico: tem estoque, mas travado num documento (remessa ainda não
        criada, ou fatura ainda não emitida sobre remessa já feita).
     """
-    if row.get("Flag_Totalmente_Faturado") == 1:
-        return "Falso Positivo (já faturado)"
     if row.get("Cliente_Bloqueado") == 1 or (pd.notna(row.get("Valor_Credito_Disponivel")) and row["Valor_Credito_Disponivel"] < 0):
         return "Financeiro (crédito)"
     status_estoque = row.get("Status_Pendencia_Estoque")
@@ -209,24 +202,6 @@ else:
     df["Linha_Negocio"] = df["Linha_Negocio"].fillna("NAO ALOCADO")
     df["Origem_Linha_Negocio"] = df["Origem_Linha_Negocio"].fillna("NAO_ALOCADO")
 
-    n_falso_positivo = int((df["Motivo_Principal"] == "Falso Positivo (já faturado)").sum())
-    qtd_falso_positivo = df.loc[df["Motivo_Principal"] == "Falso Positivo (já faturado)", "Qtd_Pendente_Operacional"].sum()
-    if n_falso_positivo:
-        st.warning(
-            f"**Achado grave**: {n_falso_positivo:,} dos {len(df):,} itens marcados 'pendente' "
-            f"({qtd_falso_positivo:,.0f} unidades) já estão `Flag_Totalmente_Faturado=1` — "
-            "principalmente devolução (`ZREB`/`ZROB`/`ZRSG`/...) cujo `Qtd_Remetida` nunca é "
-            "populado no SAP, então ficam presos em 'sem estoque' pra sempre mesmo já "
-            "concluídos. Não entram nas métricas/gráficos abaixo por padrão (categoria "
-            "'Falso Positivo (já faturado)') — marque a caixa abaixo pra incluir mesmo assim."
-        )
-    incluir_falso_positivo = st.checkbox(
-        "Incluir 'Falso Positivo (já faturado)' nas métricas abaixo",
-        value=False,
-        key="pxe_incluir_falso_positivo",
-        help="Deixe desmarcado pra ver só backlog real — pedidos já 100% faturados não deveriam contar como pendência.",
-    )
-
     n_interco = int(df["Flag_Intercompany"].sum())
     qtd_interco = df.loc[df["Flag_Intercompany"], "Qtd_Pendente_Operacional"].sum()
     if n_interco:
@@ -243,8 +218,7 @@ else:
         key="pxe_incluir_intercompany",
         help="Deixe desmarcado pra ver só backlog comercial real — transferência entre filiais não é venda a cliente final.",
     )
-    df_base = df if incluir_falso_positivo else df[df["Motivo_Principal"] != "Falso Positivo (já faturado)"]
-    df_base = df_base if incluir_intercompany else df_base[~df_base["Flag_Intercompany"]]
+    df_base = df if incluir_intercompany else df[~df["Flag_Intercompany"]]
 
     f1, f2, f3, f4, f5, f6 = st.columns([1.1, 1.1, 1.1, 0.7, 0.7, 0.7])
     with f1:

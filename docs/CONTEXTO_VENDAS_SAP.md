@@ -335,6 +335,38 @@ sai em ~5,10-5,13 pra datas de set/2026. Ver `docs/REGRAS_E_MELHORIAS_DW.md` §2
 implementação completa da conversão BRL nos models multi-moeda (implementada e mergeada em
 `origin/main` do `data-platform`).
 
+### 6.13 BUG confirmado e CORRIGIDO (2026-09-14): `Valor_Liquido_Faturamento` positivo em nota de crédito/estorno (`VBRK.VBTYP='O'`)
+
+Achado rastreando divergência SAP vs. legado (produto `PA6019`, pedido `0060011615`): a
+fatura original (`0090261747`, `+R$106.520,00`) e o estorno dela (`0090262737`, tipo
+`REB`) apareciam **ambos positivos** em `fct_faturamento_itens_sap` — deveria ser
+negativo pra zerar a original. `VBRK.VBTYP='O'` (Gutschrift/nota de crédito, domínio SAP
+padrão) já identifica o caso: `NETWR` é gravado em módulo (positivo) por convenção SAP, o
+sinal contábil real nasce da categoria do documento, não do valor gravado. Distribuição
+histórica confirmou o padrão em **7 tipos de documento de fatura diferentes**, não só
+`REB` (20.818 de 20.860 linhas de `vbtyp='O'` positivas, deveriam ser negativas).
+
+**Corrigido** em `fct_faturamento_itens_sap.sql` (`data-platform`): adicionado `vbtyp` na
+CTE `vbrk_src`, aplicado `CASE WHEN TRIM(vbrk.vbtyp)='O' THEN -1 ELSE 1 END *
+COALESCE(vbrp.netwr, 0)` em `Valor_Liquido_Faturamento`/`_BRL`/margem/unitário, e exposto
+`vbrk.vbtyp` como coluna própria `Categoria_Documento_Faturamento` (auditável). Aplicado
+só pra `vbtyp='O'` (confirmado) — `S` (Rechnungsstorno), `N` e `5`/`6` continuam com o
+sinal original, sem correção, aguardando confirmação de negócio (ver
+`docs/REGRAS_E_MELHORIAS_DW.md`).
+
+**Validado ao vivo em produção (2026-09-14)**, via VPN + acesso direto ao GOLD: o caso
+rastreado agora sai `0090261747=+106.520` / `0090262737=-106.520` (sinal correto), e a
+categoria `O` inverteu pra **18.733 de 18.735 linhas negativas** (era quase 100%
+positivo). `S`/`N`/`5`/`6` confirmados intocados, como esperado (873/863/22/0 negativos —
+mesma distribuição da investigação original). Achado novo, fora das duas propostas: existe
+uma 8ª categoria (`vbtyp='P'`, 9 linhas, ~R$800) não identificada em nenhuma investigação
+anterior — volume irrelevante, mas sem análise.
+
+Impacto na métrica "Faturamento Total" (§10.1, que soma `Valor_Liquido_Faturamento` sem
+filtro de tipo de documento): a correção já se aplica automaticamente, sem precisar de
+mudança em `scripts/query_faturamento_comercial.py`/`query_vendas_sap.py` — eles consomem
+a coluna como está.
+
 ## 7. Como conectar (produção) — conceitos
 
 Duas origens de dados, credenciais no `.env` (nunca commitar valores, nunca colar em
@@ -564,8 +596,11 @@ restantes pra ler a conversão já pronta na Silver/Gold.
 A medida é `SUM(Valor_Liquido_Faturamento)` de `fct_faturamento_itens_sap`, sem filtro de Org
 Vendas/moeda/tipo de documento — a mesma medida que `scripts/query_vendas_sap.py::
 faturamento_mensal`/`faturamento_por_org_vendas_linha_negocio` já usam, de propósito (só uma
-noção de "Faturamento Total" circulando no app). A quebra por Canal/Linha de Negócio/
-Divisional/Regional/Distrital/Setor vem do **mesmo crosswalk** dessas duas funções:
+noção de "Faturamento Total" circulando no app). **Nota (2026-09-14)**: até essa data, notas
+de crédito (`vbtyp='O'`) somavam como faturamento positivo em vez de subtrair — corrigido na
+fonte, ver §6.13. Nenhuma mudança necessária aqui, a métrica já lê o valor corrigido. A quebra
+por Canal/Linha de Negócio/Divisional/Regional/Distrital/Setor vem do **mesmo crosswalk**
+dessas duas funções:
 `Codigo_Cliente` → `vendas.dim_cliente_setor` (`periodo` mais recente por cliente) →
 `vendas.dim_estrutura` (por `cod_setor`) — cobertura ~52% dos clientes faturados (§8.1/§8.2);
 cliente sem match cai em `'NAO ALOCADO'`.

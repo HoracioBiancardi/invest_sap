@@ -410,26 +410,26 @@ def pendencia_x_estoque_global() -> pd.DataFrame:
     se precisar investigar 1 pedido específico direto no HANA.
 
     **Achado GRAVE de auditoria (2026-09-03, via página Pendência x Estoque — reportado
-    pelo usuário com pedidos reais 0000134668/0060008372/0060009216/0060011929)**:
-    `Flag_Pendencia=1` E `Flag_Totalmente_Faturado=1` ao mesmo tempo (logicamente
-    contraditório) em **23.981 dos 46.132 itens pendentes (52%, 141,7 milhões de
-    unidades — 84,5% de TODA a quantidade pendente da base)**. Mecanismo: `Qtd_Pendente_
-    Operacional`/`Status_Pendencia_Estoque` são calculados a partir de `Qtd_Remetida`
-    (Remessa), não de `Qtd_Faturada`; pedidos de devolução (`Tipo_Ordem_Venda` `ZREB`,
-    `ZROB`, `ZRSG`, `ZRES`, `ZRET`, `ZDV1`, `ZBON`, etc. — e também alguns tipos
-    "normais" como `ZVCO`/`ZIND`/`ZDES`/`UVCO`/`UNCR`/`UDEV`) nunca populam `Qtd_
-    Remetida` mesmo depois de 100% faturados/creditados, então ficam **PARA SEMPRE**
-    marcados `Status_Pendencia='Pendente Logistico (Remessa)'` e `Status_Pendencia_
-    Estoque='Pendente sem Estoque'` mesmo já concluídos. `Valor_Pendente_Faturamento`
-    fica 0 nesses casos (por isso os KPIs em R$ desta página não foram afetados), mas
-    `Qtd_Pendente_Operacional` continua alta — **qualquer métrica de QUANTIDADE
-    calculada sobre esta função, sem filtrar `Flag_Totalmente_Faturado`, está inflada
-    em ~5x**. Análogo ao bug de `VBAP.KWMENG=0` já documentado em
-    `docs/INVESTIGACAO_PENDENCIA_SAP.md`, mas mecanismo diferente (Remessa nunca
-    populada, não quantidade zerada) — reportar ao time de dados como novo achado, fix
-    correto é no cálculo de `Flag_Pendencia`/`Status_Pendencia_Estoque` em
-    `fct_pendencia_sap.sql` (repo `data-platform`), não aqui. Mitigação nesta função:
-    traz `Flag_Totalmente_Faturado` pra quem consumir poder filtrar.
+    pelo usuário com pedidos reais 0000134668/0060008372/0060009216/0060011929) — CORRIGIDO
+    NA FONTE em 2026-09-14, validado em produção**: `Flag_Pendencia=1` E
+    `Flag_Totalmente_Faturado=1` ao mesmo tempo (logicamente contraditório) acontecia em
+    **23.981 dos 46.132 itens pendentes (52%, 141,7 milhões de unidades — 84,5% de TODA a
+    quantidade pendente da base)**. Mecanismo (histórico): `Qtd_Pendente_Operacional`/
+    `Status_Pendencia_Estoque` eram calculados a partir de `Qtd_Remetida` (Remessa), não de
+    `Qtd_Faturada`; pedidos de devolução (`Tipo_Ordem_Venda` `ZREB`, `ZROB`, `ZRSG`, `ZRES`,
+    `ZRET`, `ZDV1`, `ZBON`, etc. — e também alguns tipos "normais" como
+    `ZVCO`/`ZIND`/`ZDES`/`UVCO`/`UNCR`/`UDEV`) nunca populam `Qtd_Remetida` mesmo depois de
+    100% faturados/creditados, então ficavam marcados `Status_Pendencia='Pendente
+    Logistico (Remessa)'`/`Status_Pendencia_Estoque='Pendente sem Estoque'` mesmo já
+    concluídos. Análogo ao bug de `VBAP.KWMENG=0` já documentado em
+    `docs/INVESTIGACAO_PENDENCIA_SAP.md`, mas mecanismo diferente (Remessa nunca populada,
+    não quantidade zerada). **Corrigido em `fct_pendencia_sap.sql`** (commit `b3340021`,
+    repo `data-platform` — ver `docs/REGRAS_E_MELHORIAS_DW.md` §3.1): `Qtd_Pendente_
+    Operacional` agora trata `Flag_Totalmente_Faturado=1` como conclusão na própria fonte.
+    Validado ao vivo em produção (2026-09-14): 0 itens restantes com o padrão contraditório,
+    `SUM(Qtd_Pendente_Operacional)` caiu ~141,7mi de unidades como previsto. `Flag_
+    Totalmente_Faturado` continua exposto nesta função (útil como diagnóstico), mas não
+    deveria mais aparecer combinado com `Flag_Pendencia=1`.
 
     **Achado GRAVE 2 (2026-09-04, verificação p/ jurídico)**: `Valor_Pendente_Faturamento`
     vem na moeda do pedido original (ver `_moeda_pedido_join_sql`), sem conversão — soma sem

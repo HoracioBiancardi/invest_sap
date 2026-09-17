@@ -43,7 +43,7 @@
 
 | # | Regra | Por quê | Onde mitigado hoje |
 |---|---|---|---|
-| 1.1.1 | **Não confiar em `Flag_Pendencia=1` sem checar `Flag_Totalmente_Faturado`.** 52% dos itens "pendentes" (84,5% da quantidade pendente da base) já estão `Flag_Totalmente_Faturado=1` — contradição lógica. Mecanismo: `Qtd_Pendente_Operacional`/`Status_Pendencia_Estoque` usam `Qtd_Remetida`, que **nunca é populada** para pedidos de devolução (`ZREB`/`ZROB`/`ZRSG`/`ZRES`/`ZRET`/`ZDV1`/`ZBON`, e alguns "normais": `ZVCO`/`ZIND`/`ZDES`/`UVCO`/`UNCR`/`UDEV`), mesmo depois de 100% faturados/creditados. | Achado 2026-09-03, `pendencia_falso_positivo_faturado`. `Valor_Pendente_Faturamento=0` nesses casos — só quantidade é afetada, por isso não pegou em KPI de R$. | App: categoria `"Falso Positivo (já faturado)"` em `pages/27_Pendencia_x_Estoque.py`, checada antes de qualquer outro motivo, excluída por padrão das métricas. **Não corrigido no dbt.** |
+| 1.1.1 | ~~**Não confiar em `Flag_Pendencia=1` sem checar `Flag_Totalmente_Faturado`.**~~ **CORRIGIDO E VALIDADO EM PRODUÇÃO (2026-09-14).** Mecanismo (histórico): `Qtd_Pendente_Operacional`/`Status_Pendencia_Estoque` usavam `Qtd_Remetida`, que **nunca é populada** para pedidos de devolução (`ZREB`/`ZROB`/`ZRSG`/`ZRES`/`ZRET`/`ZDV1`/`ZBON`, e alguns "normais": `ZVCO`/`ZIND`/`ZDES`/`UVCO`/`UNCR`/`UDEV`), mesmo depois de 100% faturados/creditados. | Achado 2026-09-03, `pendencia_falso_positivo_faturado`. `Valor_Pendente_Faturamento=0` nesses casos — só quantidade era afetada, por isso não pegava em KPI de R$. | **Corrigido na fonte** (`fct_pendencia_sap.sql`, commit `b3340021` no `data-platform`) — ver proposta 3.1 (concluída). Mitigação em `pages/27_Pendencia_x_Estoque.py` (categoria `"Falso Positivo (já faturado)"`) fica pendente de remoção, ver proposta 3.1. |
 | 1.1.2 | **`VBAP.KWMENG=0` esconde quantidade real em `ZMENG`** para 7 tipos de ordem (`ZVCO` 100% dos itens = R$ 2,45 bi, `UNCR`, `ZN01`, `ZDES`, `ZDRB`, `ZPEC`, `ZD01`). Sem correção, esses itens viravam `Qtd_Pedida=0` → `Flag_Pendencia=0` → `Status_Pendencia='Concluido'`, e **sumiam** de qualquer filtro de backlog. `ZVCO` é justamente o tipo marcado como prioridade máxima (`Prioridade_Pedido=1`, regra 1.1.4) — o bug atingia a categoria que o negócio trata como mais urgente. | `docs/INVESTIGACAO_PENDENCIA_SAP.md` (2026-08-24), caso real pedido 137490, cross-validado via Salesforce. | Fix `COALESCE(NULLIF(kwmeng,0), zmeng, 0)` (`33d0cf49`, branch `feature/restruct-sap-vendas`, repo `data-platform`) em `fct_vendas_itens_sap.sql`/`fct_vendas_canceladas_sap.sql`/`dim_pendencia.sql` (legado) — **confirmado em produção em 2026-09-05** (reconferido ao vivo em `GOLD.vendas_sap`: 0 itens restantes com o padrão `Qtd_Pedida_Original=0 AND Valor>0`). Proposta 3.2 concluída. |
 | 1.1.3 | **67,9% do backlog aberto (R$ 230,5mi de R$ 339,6mi) tem >365 dias, e R$ 168mi tem >3 anos** — boa parte sem nenhuma reserva viva no SAP (`Qtd_Estoque_Reservada`/`VBBE` = 0). Provável "lixo de dado" (pedido nunca baixado/cancelado formalmente), não demanda real — mas não deve ser tratado automaticamente como cancelamento sem validar com vendas/SAP. | Achado 2026-09-03, `backlog_zumbi_achado`, via "Radar de pedido zumbi" (`pages/20_Pedidos.py`). | Só visualização/filtro no app — nenhum campo estruturado no Gold marca isso. Ver proposta 3.4. |
 | 1.1.4 | **`Prioridade_Pedido` nunca é 2 ou 3** — só assume 1 (`ZVCO`) ou 9 (resto). `Status_Alocacao_Virtual='CARIMBAGEM'` depende de prioridade 2/3, que nunca ocorre: é **status morto** em produção, não um bug de SQL. | `CONTEXTO_VENDAS_SAP.md` §6.3. | Nenhuma — gap de regra de negócio conhecido, aberto desde antes desta investigação. Ver proposta 3.6. |
@@ -140,17 +140,27 @@ implementadas, nenhuma validada com dado real ainda:
 Levantadas ao longo do uso do dashboard, sem overlap com as propostas da seção 2. Ordenadas
 por tema, não por prioridade (ver tabela de priorização §5).
 
-### 3.1 Corrigir `Flag_Pendencia`/`Status_Pendencia_Estoque` para considerar `Flag_Totalmente_Faturado`
-**Problema**: regra 1.1.1 — `fct_pendencia_sap.sql` calcula pendência de quantidade só a
-partir de `Qtd_Remetida`, nunca checando se o item já foi 100% faturado/creditado. Afeta
-52% dos itens "pendentes" (84,5% da quantidade).
-**Proposta**: no cálculo de `Qtd_Pendente_Operacional`/`Status_Pendencia_Estoque`, tratar
-`Flag_Totalmente_Faturado=1` como sinal de conclusão mesmo quando `Qtd_Remetida` não foi
-populada (típico de devolução) — equivalente ao que a mitigação no app já faz
-(`pages/27_Pendencia_x_Estoque.py::Motivo_Principal="Falso Positivo (já faturado)"`), só que
-corrigindo a fonte em vez do consumo.
-**Esforço**: médio (mudança de lógica em model já complexo, precisa de teste de regressão
-comparando volume antes/depois). **Dono**: time de dados (`data-platform`).
+### 3.1 ~~Corrigir `Flag_Pendencia`/`Status_Pendencia_Estoque` para considerar `Flag_Totalmente_Faturado`~~ — CONCLUÍDO e validado em produção (2026-09-14)
+**Problema (histórico)**: regra 1.1.1 — `fct_pendencia_sap.sql` calculava pendência de
+quantidade só a partir de `Qtd_Remetida`, nunca checando se o item já foi 100%
+faturado/creditado. Afetava 52% dos itens "pendentes" (84,5% da quantidade).
+**Correção aplicada** (`fct_pendencia_sap.sql`, CTE `base_consolidada`, commit `b3340021`
+no `data-platform`): `Qtd_Pendente_Operacional` agora trata `Flag_Totalmente_Faturado=1`
+(`Qtd_Faturada >= Qtd_Pedida`) como conclusão, independente do saldo de remessa — mesma
+regra que a mitigação do app já usava, só que na fonte em vez do consumo.
+**Validado ao vivo em produção (2026-09-14)**, via VPN + acesso direto ao GOLD:
+- 0 itens restantes com `Flag_Totalmente_Faturado=1 AND Flag_Pendencia=1` (era 23.981).
+- `SUM(Qtd_Pendente_Operacional)` caiu de ~167,4mi pra **25,6mi** unidades — queda de
+  ~141,7mi, exatamente a magnitude prevista na proposta original.
+- Caso de controle (pedido `0000134668`/item `000120`, material `PA8116`, que **não** é
+  falso-positivo) confirmado intacto: continua `Flag_Totalmente_Faturado=0`,
+  `Flag_Pendencia=1`, `Status_Pendencia='Pendente Logistico e Fiscal'` — o patch não
+  afetou o caso que devia continuar pendente.
+**Pendente**: simplificar/remover a mitigação client-side em
+`pages/27_Pendencia_x_Estoque.py::_classificar_motivo_principal` (categoria `"Falso
+Positivo (já faturado)"` + checkbox de incluir/excluir) — não deve mais encontrar casos
+depois da correção na fonte, mas segue no código até essa limpeza. **Dono**: quem mantém
+`invest_sap`.
 
 ### 3.2 ~~Deploy do fix `KWMENG=0`/`ZMENG`~~ (regra 1.1.2) — CONCLUÍDO, confirmado em produção (2026-09-05)
 **Problema (histórico)**: commit `33d0cf49` (branch `feature/restruct-sap-vendas`) corrigia
