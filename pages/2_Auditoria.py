@@ -25,6 +25,10 @@ from scripts.query_vendas_sap import auditoria_linha_negocio_rh_vs_estrutura  # 
 from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Auditoria do Fluxo — Vendas SAP", page_icon="🩺", layout="wide")
+
+from scripts.auth import require_login  # noqa: E402
+
+require_login(show_logout=False)  # defesa em profundidade: página aberta direto por URL
 st.title(":material/fact_check: Auditoria do Fluxo")
 st.caption(
     "Varre o fluxo inteiro (não um pedido específico) procurando padrões de anomalia — "

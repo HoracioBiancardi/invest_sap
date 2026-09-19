@@ -15,7 +15,7 @@ principalmente as notas sobre Prioridade_Pedido (nunca é 2/3) e Codigo_Vendedor
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Optional
+from typing import Optional, Sequence
 
 import pandas as pd
 
@@ -142,13 +142,14 @@ def _filtro_periodo_tipo_cliente(
     tipo_cliente: Optional[str],
     params: dict[str, object],
     alias_pedido: str = "p",
+    excluir_intercompany: bool = False,
 ) -> tuple[str, str]:
-    """Monta JOIN + WHERE extra pra filtrar por período de datas e Governo/Privado.
+    """Monta JOIN + WHERE extra pra filtrar por período de datas, Governo/Privado e intercompany.
 
-    Reusado por toda função de `fct_pendencia_sap` que ganhou os filtros globais do
-    dashboard (período, tipo_cliente) — ver `pages/1_Pendencias.py`. Só faz o JOIN com
-    dim_cliente_sap quando tipo_cliente é passado (Governo/Privado), pra não pagar o custo
-    do JOIN em toda consulta sem necessidade.
+    Reusado por toda função de `fct_pendencia_sap`/`fct_vendas_itens_sap` que ganhou os
+    filtros globais do dashboard (período, tipo_cliente) — ver `pages/1_Pendencias.py`. Só
+    faz o JOIN com dim_cliente_sap quando tipo_cliente é passado (Governo/Privado), pra não
+    pagar o custo do JOIN em toda consulta sem necessidade.
 
     Args:
         data_inicio, data_fim: se ambos informados, filtra Data_Inclusao_Pedido no
@@ -157,6 +158,9 @@ def _filtro_periodo_tipo_cliente(
         tipo_cliente: "Governo" ou "Privado" (None = sem filtro de tipo de cliente).
         params: dict de parâmetros do SQLAlchemy — mutado in-place com os binds usados.
         alias_pedido: alias da tabela principal (fct_pendencia_sap) na query.
+        excluir_intercompany: True tira cliente `CLIENTE_INTERCOMPANY_LIKE` via
+            `_condicao_excluir_intercompany` (ver config `excluir_intercompany` no Admin) —
+            usa `Codigo_Cliente`, funciona mesmo sem `Nome_Cliente` nativo na tabela principal.
 
     Returns:
         (join_sql, where_extra_sql) — where_extra_sql já vem prefixado com " AND ...",
@@ -169,6 +173,8 @@ def _filtro_periodo_tipo_cliente(
         condicoes.append(f"{p}.Data_Inclusao_Pedido BETWEEN :data_inicio AND :data_fim")
         params["data_inicio"] = data_inicio
         params["data_fim"] = data_fim
+    if excluir_intercompany:
+        condicoes.append(_condicao_excluir_intercompany(f"{p}.Codigo_Cliente"))
     if tipo_cliente in ("Governo", "Privado"):
         join_sql = f"""
             LEFT JOIN {SCHEMA}.dim_cliente_sap c
@@ -210,18 +216,27 @@ def _moeda_pedido_join_sql(alias_pendencia: str = "p") -> str:
     """
 
 
-def pendencias_abertas(limit: Optional[int] = None) -> pd.DataFrame:
+def pendencias_abertas(limit: Optional[int] = None, excluir_intercompany: bool = False) -> pd.DataFrame:
     """Todo o backlog aberto (Flag_Pendencia = 1) de fct_pendencia_sap, com a Moeda do pedido.
 
     Traz `Moeda` (ver `_moeda_pedido_join_sql`) pra quem consumir poder filtrar `Moeda='BRL'`
     antes de somar `Valor_Pendente_Faturamento` — nunca somar essa coluna sem filtrar moeda.
+
+    Args:
+        excluir_intercompany: ver `_condicao_excluir_intercompany` (config `excluir_intercompany`
+            no Admin) — como esta função já traz `Nome_Cliente` na linha, também dá pra filtrar
+            depois em pandas com `flag_intercompany`; este parâmetro evita puxar as linhas do
+            SQL Server à toa quando o chamador só quer o backlog comercial mesmo.
     """
     top = f"TOP {int(limit)} " if limit else ""
+    where_intercompany = (
+        f" AND {_condicao_excluir_intercompany('p.Codigo_Cliente')}" if excluir_intercompany else ""
+    )
     query = f"""
         SELECT {top}p.*, fvi.Moeda
         FROM {SCHEMA}.fct_pendencia_sap p
         {_moeda_pedido_join_sql()}
-        WHERE p.Flag_Pendencia = 1
+        WHERE p.Flag_Pendencia = 1{where_intercompany}
         ORDER BY p.Dias_Desde_Inclusao_Pedido DESC
     """  # nosec B608
     return read_sql(query, database="GOLD")
@@ -231,6 +246,7 @@ def aging_pendencias(
     data_inicio: Optional[date] = None,
     data_fim: Optional[date] = None,
     tipo_cliente: Optional[str] = None,
+    excluir_intercompany: bool = False,
 ) -> pd.DataFrame:
     """Backlog aberto agrupado em faixas de aging (dias desde a inclusão do pedido).
 
@@ -241,10 +257,11 @@ def aging_pendencias(
     Args:
         data_inicio, data_fim: se ambos informados, restringe a pedidos incluídos nesse período.
         tipo_cliente: "Governo" ou "Privado" (None = os dois).
+        excluir_intercompany: ver `_filtro_periodo_tipo_cliente`.
     """
     params: dict[str, object] = {}
     join_sql, where_extra = _filtro_periodo_tipo_cliente(
-        data_inicio, data_fim, tipo_cliente, params
+        data_inicio, data_fim, tipo_cliente, params, excluir_intercompany=excluir_intercompany
     )
     query = f"""
         SELECT
@@ -278,15 +295,19 @@ def pendencia_status_estoque(
     data_inicio: Optional[date] = None,
     data_fim: Optional[date] = None,
     tipo_cliente: Optional[str] = None,
+    excluir_intercompany: bool = False,
 ) -> pd.DataFrame:
     """Distribuição do backlog por cobertura de estoque (Status_Pendencia_Estoque).
 
     `Valor_Pendente_Total` soma só `Moeda='BRL'` (ver `_moeda_pedido_join_sql`) — não mistura
     moeda; `Qtd_Pendente_Total` soma todas as moedas.
+
+    Args:
+        excluir_intercompany: ver `_filtro_periodo_tipo_cliente`.
     """
     params: dict[str, object] = {}
     join_sql, where_extra = _filtro_periodo_tipo_cliente(
-        data_inicio, data_fim, tipo_cliente, params
+        data_inicio, data_fim, tipo_cliente, params, excluir_intercompany=excluir_intercompany
     )
     query = f"""
         SELECT
@@ -309,16 +330,20 @@ def top_clientes_pendentes(
     data_inicio: Optional[date] = None,
     data_fim: Optional[date] = None,
     tipo_cliente: Optional[str] = None,
+    excluir_intercompany: bool = False,
 ) -> pd.DataFrame:
     """Top N clientes por valor financeiro pendente de faturamento.
 
     `Valor_Pendente_Total` soma só `Moeda='BRL'` (ver `_moeda_pedido_join_sql`) — cliente com
     backlog só em moeda estrangeira pode não aparecer/ficar subestimado neste ranking em R$;
     `Qtd_Pendente_Total` soma todas as moedas.
+
+    Args:
+        excluir_intercompany: ver `_filtro_periodo_tipo_cliente`.
     """
     params: dict[str, object] = {}
     join_sql, where_extra = _filtro_periodo_tipo_cliente(
-        data_inicio, data_fim, tipo_cliente, params
+        data_inicio, data_fim, tipo_cliente, params, excluir_intercompany=excluir_intercompany
     )
     query = f"""
         SELECT TOP {int(n)}
@@ -508,6 +533,58 @@ def organizacoes_vendas_texto() -> pd.DataFrame:
 # movimentação interna) — sem excluir, o NAO ALOCADO por quantidade fica em ~98%, bem
 # diferente do Painel Vendas de referência (que já exclui essas transferências).
 CLIENTE_INTERCOMPANY_LIKE = "BLAU"
+
+
+def flag_intercompany(nome_cliente: pd.Series) -> pd.Series:
+    """`True` onde `Nome_Cliente` contém `CLIENTE_INTERCOMPANY_LIKE` — mesma heurística
+    usada em Pendência x Estoque, reaproveitada por qualquer página que precise excluir
+    filial intercompany das métricas (ver config `excluir_intercompany` no Admin).
+    """
+    return nome_cliente.str.contains(CLIENTE_INTERCOMPANY_LIKE, case=False, na=False)
+
+
+# Organização de Vendas (SAP VKORG) das filiais comerciais da Colômbia/Uruguai — achado
+# 2026-09-19 (página Pendência x Estoque, tabela Motivo_Principal x Organização de Vendas):
+# diferente de `CLIENTE_INTERCOMPANY_LIKE` (nome do CLIENTE final) e de
+# `PAISES_INTERNACIONAIS_EXCLUIVEIS` (país do CENTRO físico de estoque), esta é a Org Vendas
+# em si — pendência atribuída a "Blau Farma Colombia"/"Blau Farma Uruguay" pode ser venda
+# real pra cliente externo (não intercompany) processada pela filial comercial do país, não
+# só transferência interna. Ver config `excluir_org_vendas_internacional` no Admin.
+ORG_VENDAS_INTERNACIONAL_LIKE = ("Colombia", "Uruguay")
+
+
+def flag_org_vendas_internacional(nome_org_vendas: pd.Series) -> pd.Series:
+    """`True` onde `Nome_Org_Vendas`/`Descricao_Org_Vendas` contém Colômbia ou Uruguai (ver
+    `ORG_VENDAS_INTERNACIONAL_LIKE`) — equivalente pandas pra função que já expõe esse nome
+    na linha (ex. Pendência x Estoque, que junta `organizacoes_vendas_texto()` em pandas)."""
+    padrao = "|".join(ORG_VENDAS_INTERNACIONAL_LIKE)
+    return nome_org_vendas.str.contains(padrao, case=False, na=False)
+
+
+def _condicao_excluir_org_vendas_internacional(alias_nome_org_vendas: str) -> str:
+    """Predicado SQL (sem `AND` na frente), NULL-safe, que tira Organização de Vendas
+    internacional (ver `ORG_VENDAS_INTERNACIONAL_LIKE`/`flag_org_vendas_internacional`) —
+    NULL-safe porque a coluna normalmente vem de um LEFT JOIN opcional."""
+    condicoes_like = " AND ".join(
+        f"{alias_nome_org_vendas} NOT LIKE '%{termo}%'" for termo in ORG_VENDAS_INTERNACIONAL_LIKE
+    )
+    return f"({alias_nome_org_vendas} IS NULL OR ({condicoes_like}))"
+
+
+def _condicao_excluir_intercompany(alias_codigo_cliente: str) -> str:
+    """Predicado SQL (sem `AND` na frente) que tira cliente intercompany via subquery em
+    `dim_cliente_sap`, casando por `Codigo_Cliente` — funciona mesmo quando a tabela
+    principal da query não tem `Nome_Cliente` nativo (ex. `fct_vendas_itens_sap`,
+    `fct_faturamento_itens_sap`, `fct_remessa_itens_sap`, que só têm `Codigo_Cliente`), sem
+    precisar de JOIN extra. Equivalente SQL de `flag_intercompany` (que opera em pandas,
+    pra função que já expõe `Nome_Cliente` na linha) — use este quando a query agrega no SQL
+    antes do `Nome_Cliente` chegar no pandas. Ver config `excluir_intercompany` no Admin.
+    """
+    return (
+        f"{alias_codigo_cliente} NOT IN ("
+        f"SELECT DISTINCT Codigo_Cliente FROM {SCHEMA}.dim_cliente_sap "
+        f"WHERE Nome_Cliente LIKE '%{CLIENTE_INTERCOMPANY_LIKE}%')"
+    )
 
 
 def linha_negocio_por_cliente() -> pd.DataFrame:
@@ -886,6 +963,7 @@ def remessas(
     data_inicio: Optional[date] = None,
     data_fim: Optional[date] = None,
     limit: int = 2000,
+    excluir_intercompany: bool = False,
 ) -> pd.DataFrame:
     """Remessas (entregas) item a item, de `fct_remessa_itens_sap` (grão Entrega+Item).
 
@@ -914,9 +992,13 @@ def remessas(
         codigo_produto, codigo_centro, codigo_cliente: filtros exatos.
         data_inicio, data_fim: período de `Data_Remessa` (se ambos informados).
         limit: teto de linhas.
+        excluir_intercompany: ver `_condicao_excluir_intercompany`/config `excluir_intercompany`
+            no Admin — casa por `Codigo_Cliente` (mesmo sem `Nome_Cliente` nativo aqui).
     """
     condicoes = []
     params: dict[str, object] = {}
+    if excluir_intercompany:
+        condicoes.append(_condicao_excluir_intercompany("r.Codigo_Cliente"))
     if numero_pedido:
         condicoes.append("r.Numero_Pedido_Origem = :numero_pedido")
         params["numero_pedido"] = numero_pedido.strip().zfill(10)
@@ -946,7 +1028,9 @@ def remessas(
 
 
 def remessas_resumo(
-    data_inicio: Optional[date] = None, data_fim: Optional[date] = None
+    data_inicio: Optional[date] = None,
+    data_fim: Optional[date] = None,
+    excluir_intercompany: bool = False,
 ) -> pd.DataFrame:
     """Remessas agregadas por Tipo de Remessa x Centro — visão de volume, sem item a item.
 
@@ -957,13 +1041,18 @@ def remessas_resumo(
     Args:
         data_inicio, data_fim: período de `Data_Remessa` (se ambos informados; senão traz
             tudo).
+        excluir_intercompany: ver `_condicao_excluir_intercompany`/config `excluir_intercompany`
+            no Admin — sem `Nome_Cliente` nativo aqui, casa por `Codigo_Cliente`.
     """
+    condicoes = []
     params: dict[str, object] = {}
-    where = ""
     if data_inicio and data_fim:
-        where = "WHERE Data_Remessa BETWEEN :data_inicio AND :data_fim"
+        condicoes.append("Data_Remessa BETWEEN :data_inicio AND :data_fim")
         params["data_inicio"] = data_inicio
         params["data_fim"] = data_fim
+    if excluir_intercompany:
+        condicoes.append(_condicao_excluir_intercompany("Codigo_Cliente"))
+    where = ("WHERE " + " AND ".join(condicoes)) if condicoes else ""
     query = f"""
         SELECT
             Tipo_Remessa,
@@ -1005,6 +1094,7 @@ def correlacao_oportunidade_pedido_pendencia_fatura(
     tipo_ordem_venda: Optional[str] = None,
     tipo_cliente: Optional[str] = None,
     limit: int = 20000,
+    excluir_intercompany: bool = False,
 ) -> pd.DataFrame:
     """Correlaciona Oportunidade (Salesforce) -> Pedido -> Pendência -> Faturado.
 
@@ -1059,6 +1149,8 @@ def correlacao_oportunidade_pedido_pendencia_fatura(
             período muito amplo combinado com `apenas_pendentes=False` traga a tabela inteira.
             Se `len(df) == limit`, o resultado pode estar truncado — o chamador deve checar
             isso e avisar o usuário, já que a partir daí os totais deixam de ser exatos.
+        excluir_intercompany: ver `flag_intercompany`/config `excluir_intercompany` no Admin —
+            `Nome_Cliente` é nativo aqui (`p.Nome_Cliente`), sem precisar de JOIN.
 
     Nota de performance: o lado Salesforce é buscado por **filtro de data** (não por
     `WHERE ... IN (<centenas de pedidos>)`) porque medido na prática um `IN` com ~200
@@ -1100,6 +1192,8 @@ def correlacao_oportunidade_pedido_pendencia_fatura(
     if tipo_ordem_venda:
         filtros.append("p.Tipo_Ordem_Venda = :tipo_ordem_venda")
         params["tipo_ordem_venda"] = tipo_ordem_venda
+    if excluir_intercompany:
+        filtros.append(f"p.Nome_Cliente NOT LIKE '%{CLIENTE_INTERCOMPANY_LIKE}%'")
     # CANAIS_GOVERNO é uma constante fixa do código (não input externo) — seguro interpolar
     # direto; bind param nomeado não expande bem uma tupla numa cláusula IN via SQLAlchemy text().
     if tipo_cliente == "Governo":
@@ -1293,6 +1387,7 @@ def credito_disponivel_clientes(
     tipo_cliente: Optional[str] = None,
     codigo_cliente: Optional[str] = None,
     limit: int = 5000,
+    excluir_intercompany: bool = False,
 ) -> pd.DataFrame:
     """Limite/exposição de crédito por cliente (fct_limite_credito_sap).
 
@@ -1302,6 +1397,8 @@ def credito_disponivel_clientes(
         codigo_cliente: filtra por código exato do cliente (pode trazer mais de 1 linha —
             grão real é Cliente+Área de Controle de Crédito).
         limit: teto de linhas.
+        excluir_intercompany: ver `_condicao_excluir_intercompany`/config `excluir_intercompany`
+            no Admin.
     """
     join_sql, condicao_tipo = _condicao_tipo_cliente_por_codigo(tipo_cliente, "cr.Codigo_Cliente")
     filtros = []
@@ -1311,6 +1408,8 @@ def credito_disponivel_clientes(
     if codigo_cliente:
         filtros.append("cr.Codigo_Cliente = :codigo_cliente")
         params["codigo_cliente"] = codigo_cliente
+    if excluir_intercompany:
+        filtros.append(_condicao_excluir_intercompany("cr.Codigo_Cliente"))
     where = ("WHERE " + " AND ".join(filtros)) if filtros else ""
     if condicao_tipo:
         where = f"{where}{condicao_tipo}" if where else f"WHERE 1=1{condicao_tipo}"
@@ -1328,15 +1427,19 @@ def pendencia_por_tipo_ordem_venda(
     data_inicio: Optional[date] = None,
     data_fim: Optional[date] = None,
     tipo_cliente: Optional[str] = None,
+    excluir_intercompany: bool = False,
 ) -> pd.DataFrame:
     """Backlog aberto (Flag_Pendencia = 1) quebrado por Tipo_Ordem_Venda (SAP AUART).
 
     `Valor_Pendente_Total` soma só `Moeda='BRL'` (ver `_moeda_pedido_join_sql`) — não mistura
     moeda; `Qtd_Pendente_Total` soma todas as moedas.
+
+    Args:
+        excluir_intercompany: ver `_filtro_periodo_tipo_cliente`.
     """
     params: dict[str, object] = {}
     join_sql, where_extra = _filtro_periodo_tipo_cliente(
-        data_inicio, data_fim, tipo_cliente, params
+        data_inicio, data_fim, tipo_cliente, params, excluir_intercompany=excluir_intercompany
     )
     query = f"""
         SELECT
@@ -1367,6 +1470,11 @@ TIPOS_MATERIAL_PRODUTO_ACABADO = ("ZFER", "ZPFA")
 # não converte pra BRL, então somar tudo junto mistura moeda. Não há tabela de câmbio (TCURR)
 # disponível nesta base pra converter de verdade — por enquanto só sinalizamos.
 MOEDA_POR_PAIS_CENTRO = {"BR": "BRL", "UY": "UYU", "CO": "COP", "DE": "EUR"}
+
+# Filiais internacionais que o admin pode optar por excluir das métricas de estoque via
+# `excluir_paises_internacionais` (config `excluir_estoque_internacional`, ver pages/90_Admin.py)
+# — só Uruguai/Colômbia (Alemanha não entra, não foi pedido e é volume residual).
+PAISES_INTERNACIONAIS_EXCLUIVEIS = ("UY", "CO")
 
 
 def _moeda_case_sql(alias_pais: str = "c.Pais_Centro") -> str:
@@ -1453,6 +1561,7 @@ def estoque_restrito_disponivel(
     produto_acabado: Optional[bool] = None,
     pais_centro: Optional[str] = None,
     limit: int = 500,
+    excluir_paises_internacionais: bool = False,
 ) -> pd.DataFrame:
     """Estoque por Material+Centro, quebrando livre/qualidade/bloqueado/disponível pra venda.
 
@@ -1477,6 +1586,8 @@ def estoque_restrito_disponivel(
         pais_centro: filtra por país do centro (`dim_centro_sap.Pais_Centro`, ex.: 'BR',
             'UY', 'CO') — None traz todos os países.
         limit: teto de linhas (Material+Centro).
+        excluir_paises_internacionais: True exclui `PAISES_INTERNACIONAIS_EXCLUIVEIS`
+            (Uruguai/Colômbia). Ignorado se `pais_centro` já filtra pra 1 país específico.
     """
     filtros = []
     params: dict[str, object] = {}
@@ -1489,6 +1600,8 @@ def estoque_restrito_disponivel(
     if pais_centro:
         filtros.append("c.Pais_Centro = :pais_centro")
         params["pais_centro"] = pais_centro
+    elif excluir_paises_internacionais:
+        filtros.append(f"(c.Pais_Centro IS NULL OR c.Pais_Centro NOT IN {PAISES_INTERNACIONAIS_EXCLUIVEIS})")
     if produto_acabado is True:
         filtros.append(f"m.Tipo_Material IN {TIPOS_MATERIAL_PRODUTO_ACABADO}")
     elif produto_acabado is False:
@@ -1533,6 +1646,7 @@ def estoque_validade_resumo(
     codigo_centro: Optional[str] = None,
     produto_acabado: Optional[bool] = None,
     pais_centro: Optional[str] = None,
+    excluir_paises_internacionais: bool = False,
 ) -> pd.DataFrame:
     """Totais de estoque por faixa de validade (Vencido, 0-30/31-90/91-180/180+ dias).
 
@@ -1558,6 +1672,8 @@ def estoque_validade_resumo(
     if pais_centro:
         filtros.append("c.Pais_Centro = :pais_centro")
         params["pais_centro"] = pais_centro
+    elif excluir_paises_internacionais:
+        filtros.append(f"(c.Pais_Centro IS NULL OR c.Pais_Centro NOT IN {PAISES_INTERNACIONAIS_EXCLUIVEIS})")
     if produto_acabado is True:
         filtros.append(f"m.Tipo_Material IN {TIPOS_MATERIAL_PRODUTO_ACABADO}")
     elif produto_acabado is False:
@@ -1602,6 +1718,7 @@ def estoque_validade(
     produto_acabado: Optional[bool] = None,
     pais_centro: Optional[str] = None,
     limit: int = 2000,
+    excluir_paises_internacionais: bool = False,
 ) -> pd.DataFrame:
     """Estoque por lote (não agregado) com data de validade, pra achar produto vencido/a vencer.
 
@@ -1632,6 +1749,8 @@ def estoque_validade(
     if pais_centro:
         filtros.append("c.Pais_Centro = :pais_centro")
         params["pais_centro"] = pais_centro
+    elif excluir_paises_internacionais:
+        filtros.append(f"(c.Pais_Centro IS NULL OR c.Pais_Centro NOT IN {PAISES_INTERNACIONAIS_EXCLUIVEIS})")
     if produto_acabado is True:
         filtros.append(f"m.Tipo_Material IN {TIPOS_MATERIAL_PRODUTO_ACABADO}")
     elif produto_acabado is False:
@@ -1674,6 +1793,7 @@ def devolucoes_credito_motivo(
     codigo_cliente: Optional[str] = None,
     tipo_cliente: Optional[str] = None,
     limit: int = 2000,
+    excluir_intercompany: bool = False,
 ) -> pd.DataFrame:
     """Lançamentos de crédito/devolução/abatimento de cliente, com motivo em texto livre.
 
@@ -1701,6 +1821,8 @@ def devolucoes_credito_motivo(
         codigo_cliente: filtra por código exato do cliente.
         tipo_cliente: "Governo" ou "Privado" (None = os dois) — ver `_condicao_tipo_cliente_por_codigo`.
         limit: teto de linhas.
+        excluir_intercompany: ver `flag_intercompany`/config `excluir_intercompany` no Admin —
+            `Nome_Cliente` é nativo aqui, sem precisar de JOIN.
 
     Nota: os códigos de `Tp_doc` (RV, AB, DR, DG, DZ, LM, DA, EX, SA) não têm tradução pra
     texto oficial disponível nesta base ainda (a ingestão da tabela SAP `T003T` já foi
@@ -1723,6 +1845,8 @@ def devolucoes_credito_motivo(
     if codigo_cliente:
         filtros.append("CAST(d.Codigo_Cliente AS BIGINT) = CAST(:codigo_cliente AS BIGINT)")
         params["codigo_cliente"] = codigo_cliente
+    if excluir_intercompany:
+        filtros.append(f"d.Nome_Cliente NOT LIKE '%{CLIENTE_INTERCOMPANY_LIKE}%'")
     join_tipo, condicao_tipo = _condicao_tipo_cliente_por_codigo(tipo_cliente, "d.Codigo_Cliente")
     where = "WHERE " + " AND ".join(filtros) + condicao_tipo
     query = f"""
@@ -1743,6 +1867,8 @@ def faturamento_por_org_vendas_linha_negocio(
     data_inicio: Optional[date] = None,
     data_fim: Optional[date] = None,
     tipo_cliente: Optional[str] = None,
+    excluir_intercompany: bool = False,
+    excluir_org_vendas_internacional: bool = False,
 ) -> pd.DataFrame:
     """Faturamento agregado por Organização de Vendas (SAP) x Linha de Negócio (comercial).
 
@@ -1782,6 +1908,13 @@ def faturamento_por_org_vendas_linha_negocio(
         data_inicio, data_fim: período de Data_Faturamento. Se algum for None, usa o
             default (últimos 90 dias corridos até hoje).
         tipo_cliente: "Governo" ou "Privado" (None = os dois).
+        excluir_intercompany: ver `_condicao_excluir_intercompany` (config `excluir_intercompany`
+            no Admin) — `fct_faturamento_itens_sap` não tem `Nome_Cliente` nativo, o filtro
+            casa por `Codigo_Cliente` via subquery em `dim_cliente_sap`, sem precisar de JOIN.
+        excluir_org_vendas_internacional: ver `_condicao_excluir_org_vendas_internacional`
+            (config `excluir_org_vendas_internacional` no Admin) — tira Organização de Vendas
+            "Blau Farma Colombia"/"Blau Farma Uruguay" (`ov.Descricao_Org_Vendas`), diferente
+            de `excluir_intercompany` (esse é por cliente, não por Org Vendas).
 
     Achado 2026-09-04: `f.Moeda` varia por linha (BRL/UYU/COP/USD/CLP, sem conversão — ver
     §10.0/§10.1). Agora sai no grão do retorno (1 linha por Org_Vendas+Linha_Negocio+Moeda)
@@ -1793,6 +1926,10 @@ def faturamento_por_org_vendas_linha_negocio(
         data_inicio = data_fim - timedelta(days=90)
 
     join_tipo, condicao_tipo = _condicao_tipo_cliente_por_codigo(tipo_cliente, "f.Codigo_Cliente")
+    if excluir_intercompany:
+        condicao_tipo += f" AND {_condicao_excluir_intercompany('f.Codigo_Cliente')}"
+    if excluir_org_vendas_internacional:
+        condicao_tipo += f" AND {_condicao_excluir_org_vendas_internacional('ov.Descricao_Org_Vendas')}"
     chave_fato = _chave_org_vda_cli_sql("f.Codigo_Cliente", "f.Codigo_Org_Vendas")
     query = f"""
         WITH{_cte_linha_manual_sql()},
@@ -2004,7 +2141,9 @@ def auditoria_linha_negocio_rh_vs_estrutura(meses: int = 12) -> pd.DataFrame:
 
 
 def meta_vs_realizado_mensal(
-    data_inicio: Optional[date] = None, data_fim: Optional[date] = None, bu: Optional[str] = None
+    data_inicio: Optional[date] = None,
+    data_fim: Optional[date] = None,
+    bu: Optional[Sequence[str]] = None,
 ) -> pd.DataFrame:
     """Meta comercial (planejamento) x Realizado (faturamento SAP), agregado por mês x BU.
 
@@ -2031,7 +2170,7 @@ def meta_vs_realizado_mensal(
             data cheia da fatura, não truncado pro 1º dia do mês — um `data_fim` no meio do
             mês corrente vai mostrar Realizado parcial (mês incompleto) pra esse mês, o que
             é esperado, não um bug.
-        bu: filtra 1 BU específica. None = todas.
+        bu: filtra por 1 ou mais BUs. None/vazio = todas.
 
     Achado 2026-09-04: `Meta_Valor` (`vendas.fat_meta_equipe`) é planejamento orçamentário,
     sempre BRL (não existe meta em moeda estrangeira nesta base); `Valor_Realizado` agora é
@@ -2079,7 +2218,10 @@ def meta_vs_realizado_mensal(
             .agg(Valor_Realizado=("Valor_Realizado", "sum"), Unidades_Realizado=("Unidades_Realizado", "sum"))
         )
 
-    condicao_bu = " AND m.bu = :bu" if bu else ""
+    bu_params = {f"bu{i}": valor for i, valor in enumerate(bu)} if bu else {}
+    condicao_bu = (
+        f" AND m.bu IN ({','.join(':' + nome for nome in bu_params)})" if bu_params else ""
+    )
     meta_query = f"""
         SELECT
             m.data_meta AS Mes, m.cod_setor, m.material, m.bu AS BU,
@@ -2088,9 +2230,7 @@ def meta_vs_realizado_mensal(
         WHERE m.data_meta BETWEEN :data_inicio AND :data_fim{condicao_bu}
         GROUP BY m.data_meta, m.cod_setor, m.material, m.bu
     """  # nosec B608
-    params = {"data_inicio": data_inicio, "data_fim": data_fim}
-    if bu:
-        params["bu"] = bu
+    params = {"data_inicio": data_inicio, "data_fim": data_fim, **bu_params}
     df_meta = read_sql(meta_query, database="GOLD", params=params)
     if not df_meta.empty:
         df_meta["Mes"] = pd.to_datetime(df_meta["Mes"])
@@ -2118,7 +2258,7 @@ def meta_vs_realizado_mensal(
     return resumo
 
 
-def estoque_totais() -> pd.DataFrame:
+def estoque_totais(excluir_paises_internacionais: bool = False) -> pd.DataFrame:
     """Totais agregados de estoque (1 linha) — pra KPI de resumo, sem quebrar por Material+Centro.
 
     Mais barato que somar `estoque_restrito_disponivel()` (que traz linha por Material+Centro)
@@ -2127,10 +2267,17 @@ def estoque_totais() -> pd.DataFrame:
     `Valor_Financeiro_Estoque` aqui soma **só centros BRL** (`Moeda='BRL'`, ver
     `MOEDA_POR_PAIS_CENTRO`) — centros do Uruguai/Colômbia valoram em moeda local não
     convertida, misturar geraria um "R$" que não é R$ de verdade. `Qtd_*` continua somando
-    todos os centros (quantidade não depende de moeda). Use `estoque_restrito_disponivel()`
+    todos os centros (quantidade não depende de moeda), a menos que
+    `excluir_paises_internacionais=True` (ver `PAISES_INTERNACIONAIS_EXCLUIVEIS`), aí
+    `Qtd_*` também para de contar Uruguai/Colômbia. Use `estoque_restrito_disponivel()`
     se precisar do valor por centro, incluindo os não-BRL (com a moeda marcada na coluna).
     """
     moeda_case = _moeda_case_sql("c.Pais_Centro")
+    where = (
+        f"WHERE (c.Pais_Centro IS NULL OR c.Pais_Centro NOT IN {PAISES_INTERNACIONAIS_EXCLUIVEIS})"
+        if excluir_paises_internacionais
+        else ""
+    )
     query = f"""
         SELECT
             SUM(e.Qtd_Disponivel_Venda) AS Qtd_Disponivel_Venda,
@@ -2140,6 +2287,7 @@ def estoque_totais() -> pd.DataFrame:
         FROM {SCHEMA}.fct_estoque_lote_sap e
         LEFT JOIN (SELECT DISTINCT Codigo_Centro, Pais_Centro FROM {SCHEMA}.dim_centro_sap) c
             ON e.Codigo_Centro = c.Codigo_Centro
+        {where}
     """  # nosec B608
     return read_sql(query, database="GOLD")
 
@@ -2208,7 +2356,7 @@ def movimento_estoque_resumo_material_centro(meses: int = 24) -> pd.DataFrame:
     return read_sql(query, database="SILVER", params={"meses_neg": -abs(int(meses))})
 
 
-def faturamento_mensal(meses: int = 12) -> pd.DataFrame:
+def faturamento_mensal(meses: int = 12, excluir_intercompany: bool = False) -> pd.DataFrame:
     """Faturamento mensal agregado dos últimos N meses — pra gráfico de evolução/tendência.
 
     Sem quebra por Org Vendas/Linha de Negócio (ver `faturamento_por_org_vendas_linha_negocio`
@@ -2222,7 +2370,15 @@ def faturamento_mensal(meses: int = 12) -> pd.DataFrame:
     CLP, sem conversão — ver docs/CONTEXTO_VENDAS_SAP.md §10.0/§10.1). `Moeda` agora sai no
     grão do retorno (1 linha por Mes+Moeda) — quem consumir deve somar/mostrar por moeda
     separada (`scripts/ui_theme.py::render_valor_por_moeda`), nunca juntar tudo num só R$.
+
+    Args:
+        excluir_intercompany: ver `_condicao_excluir_intercompany` (config `excluir_intercompany`
+            no Admin) — `fct_faturamento_itens_sap` não tem `Nome_Cliente` nativo, o filtro
+            casa por `Codigo_Cliente` via subquery em `dim_cliente_sap`, sem precisar de JOIN.
     """
+    where_intercompany = (
+        f" AND {_condicao_excluir_intercompany('Codigo_Cliente')}" if excluir_intercompany else ""
+    )
     query = f"""
         SELECT
             FORMAT(Data_Faturamento, 'yyyy-MM') AS Mes,
@@ -2231,14 +2387,14 @@ def faturamento_mensal(meses: int = 12) -> pd.DataFrame:
             SUM(Qtd_Faturada) AS Qtd_Faturada
         FROM {SCHEMA}.fct_faturamento_itens_sap
         WHERE Data_Faturamento >= DATEADD(month, :meses_neg, CAST(GETDATE() AS date))
-            AND Data_Faturamento <= CAST(GETDATE() AS date)
+            AND Data_Faturamento <= CAST(GETDATE() AS date){where_intercompany}
         GROUP BY FORMAT(Data_Faturamento, 'yyyy-MM'), Moeda
         ORDER BY Mes
     """  # nosec B608
     return read_sql(query, database="GOLD", params={"meses_neg": -abs(int(meses))})
 
 
-def pedidos_mensal(meses: int = 24) -> pd.DataFrame:
+def pedidos_mensal(meses: int = 24, excluir_intercompany: bool = False) -> pd.DataFrame:
     """Valor de pedido entrando no funil por mês (Data_Inclusao_Pedido), últimos N meses.
 
     Fonte: `fct_vendas_itens_sap` (histórico real desde 2014-01, diferente de
@@ -2252,7 +2408,15 @@ def pedidos_mensal(meses: int = 24) -> pd.DataFrame:
     não são afetados, mas por isso não dividir `Valor_Pedido` por `Qtd_Pedidos` pra tirar
     "valor médio de pedido" — o denominador incluiria pedido em moeda estrangeira que não
     entrou no numerador; use `Qtd_Pedidos_BRL` (só pedidos BRL) pra essa conta.
+
+    Args:
+        excluir_intercompany: ver `_condicao_excluir_intercompany` (config `excluir_intercompany`
+            no Admin) — `fct_vendas_itens_sap` não tem `Nome_Cliente` nativo, o filtro casa
+            por `Codigo_Cliente` via subquery em `dim_cliente_sap`, sem precisar de JOIN.
     """
+    where_intercompany = (
+        f" AND {_condicao_excluir_intercompany('Codigo_Cliente')}" if excluir_intercompany else ""
+    )
     query = f"""
         SELECT
             FORMAT(Data_Inclusao_Pedido, 'yyyy-MM') AS Mes,
@@ -2262,7 +2426,7 @@ def pedidos_mensal(meses: int = 24) -> pd.DataFrame:
             COUNT(DISTINCT CASE WHEN Moeda = 'BRL' THEN Numero_Pedido END) AS Qtd_Pedidos_BRL
         FROM {SCHEMA}.fct_vendas_itens_sap
         WHERE Data_Inclusao_Pedido >= DATEADD(month, :meses_neg, CAST(GETDATE() AS date))
-            AND Data_Inclusao_Pedido <= CAST(GETDATE() AS date)
+            AND Data_Inclusao_Pedido <= CAST(GETDATE() AS date){where_intercompany}
         GROUP BY FORMAT(Data_Inclusao_Pedido, 'yyyy-MM')
         ORDER BY Mes
     """  # nosec B608
@@ -2274,6 +2438,7 @@ def pedidos_por_cliente(
     data_fim: date,
     n: int = 20,
     tipo_cliente: Optional[str] = None,
+    excluir_intercompany: bool = False,
 ) -> pd.DataFrame:
     """Pedidos entrando no funil (`Data_Inclusao_Pedido`) agregados por cliente: quantos
     pedidos, quantos itens no total, média de itens por pedido e valor médio por pedido.
@@ -2284,10 +2449,14 @@ def pedidos_por_cliente(
     Restrito a pedidos `Moeda='BRL'` (mesmo achado de moeda de `_moeda_pedido_join_sql`) —
     cliente com pedidos só em moeda estrangeira no período não aparece neste ranking, pra não
     misturar BRL/USD/UYU/COP/EUR num único "Valor_Medio_Pedido".
+
+    Args:
+        excluir_intercompany: ver `_filtro_periodo_tipo_cliente`.
     """
     params: dict[str, object] = {}
     join_sql, where_extra = _filtro_periodo_tipo_cliente(
-        data_inicio, data_fim, tipo_cliente, params, alias_pedido="p"
+        data_inicio, data_fim, tipo_cliente, params, alias_pedido="p",
+        excluir_intercompany=excluir_intercompany,
     )
     query = f"""
         WITH pedido_agg AS (
@@ -2318,7 +2487,9 @@ def pedidos_por_cliente(
     return read_sql(query, database="GOLD", params=params)
 
 
-def devolucoes_mensal(meses: int = 24, excluir_faturamento_rotina: bool = True) -> pd.DataFrame:
+def devolucoes_mensal(
+    meses: int = 24, excluir_faturamento_rotina: bool = True, excluir_intercompany: bool = False
+) -> pd.DataFrame:
     """Devoluções/créditos/abatimentos de cliente por mês (Data_Documento), últimos N meses.
 
     Fonte: `vendas_sap.fct_credito_devolucoes_sap` — **não** `vendas.dim_credito_devolucoes`
@@ -2331,6 +2502,8 @@ def devolucoes_mensal(meses: int = 24, excluir_faturamento_rotina: bool = True) 
         meses: janela em meses.
         excluir_faturamento_rotina: se True (padrão), exclui `Tipo_Documento_Contabil = 'RV'`
             — ver nota em `devolucoes_credito_motivo`.
+        excluir_intercompany: ver `flag_intercompany`/config `excluir_intercompany` no Admin —
+            `Nome_Cliente` é nativo aqui, sem precisar de JOIN.
 
     Achado 2026-09-04: `Valor_Lancamento_Moeda_Local` é por `Empresa_Codigo` (5 empresas SAP
     distintas na base: 1000, CO10, UR01, BG01, IICT — confirmado ao vivo, valor real em
@@ -2340,6 +2513,9 @@ def devolucoes_mensal(meses: int = 24, excluir_faturamento_rotina: bool = True) 
     não some entre empresas sem confirmar antes que são todas BRL.
     """
     where_rv = "AND Tipo_Documento_Contabil <> 'RV'" if excluir_faturamento_rotina else ""
+    where_intercompany = (
+        f"AND Nome_Cliente NOT LIKE '%{CLIENTE_INTERCOMPANY_LIKE}%'" if excluir_intercompany else ""
+    )
     query = f"""
         SELECT
             FORMAT(Data_Documento, 'yyyy-MM') AS Mes,
@@ -2350,6 +2526,7 @@ def devolucoes_mensal(meses: int = 24, excluir_faturamento_rotina: bool = True) 
         WHERE Data_Documento >= DATEADD(month, :meses_neg, CAST(GETDATE() AS date))
             AND Data_Documento <= CAST(GETDATE() AS date)
             {where_rv}
+            {where_intercompany}
         GROUP BY FORMAT(Data_Documento, 'yyyy-MM'), Empresa_Codigo
         ORDER BY Mes
     """  # nosec B608

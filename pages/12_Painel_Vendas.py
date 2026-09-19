@@ -42,6 +42,10 @@ from scripts.ui_filtros_comercial import render_filtros_comercial  # noqa: E402
 from scripts.ui_theme import card, render_filtro_tipo_cliente, render_valor_por_moeda  # noqa: E402
 
 st.set_page_config(page_title="Painel Vendas — Vendas Comercial", page_icon="🎯", layout="wide")
+
+from scripts.auth import require_login  # noqa: E402
+
+require_login(show_logout=False)  # defesa em profundidade: página aberta direto por URL
 st.title(":material/speed: Painel Vendas")
 st.caption(
     "Fonte: `GOLD.vendas_sap.fct_faturamento_itens_sap` (+ `GOLD.vendas.fat_meta_equipe` na "

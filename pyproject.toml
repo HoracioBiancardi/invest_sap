@@ -33,6 +33,7 @@ dev = [
     "flake8 (>=7.3.0,<8.0.0)",
     "confluent-kafka>=2.14.2",
     "ipykernel (>=7.2.0,<8.0.0)",
+    "pytest>=8.0.0",
 ]
 
 
@@ -52,3 +53,7 @@ args = [
   { name = "target", positional = true },
   { name = "select", positional = true }
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

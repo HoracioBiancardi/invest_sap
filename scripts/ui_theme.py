@@ -26,6 +26,7 @@ o jeito certo de ter uma marca acima do menu, não um hack de CSS `order`.
 from __future__ import annotations
 
 import datetime as _dt
+import html
 import re
 from pathlib import Path
 
@@ -134,8 +135,16 @@ div[data-testid="stSpinnerIcon"]::before {
 }
 
 /* Tabelas/dataframes: só o arredondado — a borda quem dá é o card (`.st-key-bmt-card-*`)
-   que normalmente envolve a tabela; ver função `card()` abaixo. */
+   que normalmente envolve a tabela; ver função `card()` abaixo. `overflow: hidden` vai no
+   filho `stDataFrameResizable` (o grid em si), não no `stDataFrame` — esse é o pai direto
+   do toolbar de hover (`stElementToolbar`, confirmado no bundle JS do Streamlit instalado:
+   `DataFrame.*.js` renderiza toolbar e grid como irmãos dentro do mesmo `stDataFrame`), e
+   `overflow: hidden` ali cortava o toolbar inteiro (ele "sumia" no hover em vez de só ficar
+   atrás de algo, diferente do problema de z-index abaixo, que é outro). */
 div[data-testid="stDataFrame"] {
+    border-radius: 8px;
+}
+div[data-testid="stDataFrameResizable"] {
     border-radius: 8px;
     overflow: hidden;
 }
@@ -210,6 +219,22 @@ div[class*="st-key-bmt-card-"] .vega-embed summary,
 div[class*="st-key-bmt-card-"] .vega-embed .vega-actions {
     z-index: 3 !important;
 }
+/* Mesmo cenário "sem heading empurrando pra baixo" acima, mas o sintoma aqui é outro: o
+   toolbar (`stElementToolbar`) flutua ACIMA do próprio elemento (offset negativo, padrão do
+   Streamlit) pra não ocupar espaço no layout — quando o elemento é o primeiro filho do seu
+   bloco (direto no card, ou dentro de 1 coluna de `st.columns()` dentro do card, como
+   tabela+gráfico lado a lado), esse offset negativo estoura o teto do card e o
+   `overflow: hidden` dele (necessário pro acento diagonal acima ficar só com a ponta visível,
+   não um losango inteiro flutuando) corta o toolbar de vez — ele some, em vez de só ficar
+   sujo atrás de algo (esse já era resolvido pelo z-index acima). Fix: reservar espaço no
+   topo só quando o 1º elemento do bloco tiver toolbar (`:has()`), sem mexer no espaçamento
+   de cards que já têm heading/`card_label()` antes (nesses o elemento não é `:first-child`
+   do bloco, a regra não bate). `:first-child` aqui é relativo ao bloco imediato (o
+   `stVerticalBlock` do card OU de cada coluna dentro dele), não ao card inteiro — por isso
+   funciona igual pro caso "tabela+gráfico em 2 colunas" e pro caso "1 elemento só". */
+div[class*="st-key-bmt-card-"] div[data-testid="stElementContainer"]:first-child:has([data-testid="stElementToolbar"]) {
+    margin-top: 2rem;
+}
 
 /* Rótulo de card opcional (helper `card_label()`) — texto tipo painel de instrumento */
 .bmt-card-label {
@@ -250,19 +275,184 @@ div[data-testid="stNavSectionHeader"] {
 """
 
 
+# Paleta dos 3 temas do app_template (frontend/css/theme.css), mapeada pros elementos do
+# Streamlit. `corporate` é o padrão do ecossistema; `blau` é o tema de marca original.
+THEMES: dict[str, dict[str, str]] = {
+    "corporate": {
+        "label": "Corporativo",
+        "bg": "#12141a", "surface": "#1a1d24", "surface_alt": "#21252e",
+        "border": "#2d323d", "primary": "#5b8def", "primary_soft": "rgba(91, 141, 239, 0.12)",
+        "text": "#e4e6eb", "font": "Inter",
+    },
+    "green-neutral": {
+        "label": "Verde Neutro",
+        "bg": "#0d0d0d", "surface": "#161616", "surface_alt": "#202020",
+        "border": "#303030", "primary": "#1aff80", "primary_soft": "rgba(26, 255, 128, 0.12)",
+        "text": "#1aff80", "font": "Share Tech Mono",
+    },
+    "cyber-dark": {
+        "label": "Cyber Dark",
+        "bg": "#080914", "surface": "#0f1123", "surface_alt": "#171936",
+        "border": "#282c5e", "primary": "#8b5cf6", "primary_soft": "rgba(139, 92, 246, 0.15)",
+        "text": "#f3f4f6", "font": "Inter",
+    },
+    "blau": {
+        "label": "Blau (marca)",
+        "bg": "#1C1F26", "surface": "#262B33", "surface_alt": "#2F343C",
+        "border": "#3A4149", "primary": "#26B4E9", "primary_soft": "rgba(38, 180, 233, 0.12)",
+        "text": "#F1F3F5", "font": "Roboto",
+    },
+}
+DEFAULT_THEME = "corporate"
+_SS_THEME = "app_theme"
+
+
+def _theme_css(name: str) -> str:
+    t = THEMES.get(name, THEMES[DEFAULT_THEME])
+    return f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Share+Tech+Mono&family=Roboto:wght@400;700&display=swap');
+:root {{
+    --accent: {t["primary"]};
+    --accent-soft: {t["primary_soft"]};
+    --surface: {t["surface"]};
+    --surface-border: {t["border"]};
+}}
+.stApp, [data-testid="stHeader"] {{ background: {t["bg"]}; color: {t["text"]}; }}
+[data-testid="stSidebar"] {{ background: {t["surface"]}; border-right: 1px solid {t["border"]}; }}
+.stApp, .stApp p, .stApp label, .stApp h1, .stApp h2, .stApp h3, .stApp li,
+.stApp span:not([data-testid="stIconMaterial"]):not([translate="no"]), .stApp input, .stApp button, .stApp textarea {{
+    font-family: '{t["font"]}', ui-sans-serif, system-ui, sans-serif !important;
+    color: {t["text"]};
+}}
+.stApp [data-testid="stIconMaterial"], .stApp span[translate="no"] {{ font-family: "Material Symbols Rounded" !important; }}
+/* Logo Blau já fica no topo da sidebar; no cabeçalho ele colidia com a marca da Topbar. */
+[data-testid="stHeader"] [data-testid="stHeaderLogo"], [data-testid="stHeader"] [data-testid="stLogoLink"] {{ display: none !important; }}
+.stApp a {{ color: {t["primary"]}; }}
+.stApp button[kind="primary"] {{ background: {t["primary"]}; border-color: {t["primary"]}; color: {t["bg"]}; }}
+div[data-baseweb="input"], div[data-baseweb="select"] > div {{ background: {t["surface_alt"]}; }}
+.bmt-topbar {{
+    position: fixed; top: 0; left: 0; right: 0; height: 52px; z-index: 999992;
+    background: {t["surface"]}; border-bottom: 1px solid {t["border"]};
+    display: flex; align-items: center; gap: .625rem; padding: 0 1rem 0 5rem;
+    pointer-events: none;
+}}
+.bmt-topbar::after {{
+    content: ''; position: absolute; bottom: -1px; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent 0%, {t["border"]} 30%, {t["primary"]} 50%,
+        {t["border"]} 70%, transparent 100%);
+    background-size: 200% auto; animation: bmtShimmer 4s linear infinite;
+}}
+@keyframes bmtShimmer {{ from {{ background-position: 0% 0; }} to {{ background-position: 200% 0; }} }}
+.bmt-brand-icon {{
+    width: 30px; height: 30px; border-radius: 8px; background: {t["primary"]}; color: {t["bg"]};
+    display: flex; align-items: center; justify-content: center; font-weight: 700;
+    box-shadow: 0 0 0 1px {t["primary_soft"]}, 0 2px 8px {t["primary_soft"]};
+}}
+.bmt-brand-text {{ display: flex; flex-direction: column; line-height: 1; }}
+.bmt-brand-name {{ font-size: .875rem; font-weight: 700; letter-spacing: .02em; }}
+.bmt-brand-tag {{ font-size: .6rem; letter-spacing: .07em; text-transform: uppercase; opacity: .55; margin-top: .2rem; }}
+.bmt-brand-by {{
+    margin-left: .5rem; padding: .15rem .6rem; border-radius: 4px; font-size: .68rem; font-weight: 700;
+    letter-spacing: .04em; border: 1px solid {t["border"]}; background: {t["surface_alt"]};
+}}
+/* Header transparente ACIMA da topbar: é nele que mora o botão de reabrir a sidebar. */
+[data-testid="stHeader"] {{ height: 52px; background: transparent; z-index: 999995; }}
+/* Botão de reabrir a sidebar: canto esquerdo da Topbar, acima da Activity Bar (sem isso ele
+   caía em cima do ícone da marca). */
+[data-testid="stExpandSidebarButton"] {{
+    position: fixed; left: 14px; top: 12px; z-index: 999996; color: {t["text"]};
+}}
+[data-testid="stSidebar"] > div:first-child {{ padding-top: 52px; }}
+.block-container {{ padding-top: 4.5rem !important; }}
+/* Botão Sair na Topbar (canto direito, à esquerda do indicador "Running/Stop" e do menu de 3 pontos do Streamlit). */
+[class*="st-key-bmt-logout"] {{
+    position: fixed; top: 9px; right: 12rem; z-index: 999996; width: auto !important;
+}}
+[class*="st-key-bmt-logout"] button {{
+    min-height: 2.1rem; padding: 0 .75rem; background: {t["surface_alt"]};
+    border: 1px solid {t["border"]}; color: {t["text"]};
+}}
+[class*="st-key-bmt-logout"] button:hover {{ border-color: {t["primary"]}; color: {t["primary"]}; }}
+/* Activity Bar vertical (estilo VSCode): coluna fixa de 56px à esquerda, abaixo da Topbar.
+   O `padding-left` empurra sidebar + conteúdo pra direita (só existe se a barra existe —
+   `:has`, então a tela de login não ganha a faixa vazia). */
+[data-testid="stAppViewContainer"]:has([class*="st-key-bmt-rail"]) {{ padding-left: 56px; }}
+[class*="st-key-bmt-rail"] {{
+    position: fixed; top: 52px; left: 0; bottom: 0; width: 56px; z-index: 999990;
+    background: {t["surface"]}; border-right: 1px solid {t["border"]};
+    padding: .5rem .25rem; gap: .25rem !important; overflow-y: auto;
+}}
+/* Os wrappers do page_link (container, tooltip do `help=`) encolhem ao conteúdo; sem isso a
+   célula não ocupa a largura da barra e o ícone/rótulo ficam deslocados. */
+[class*="st-key-bmt-rail"] :is([data-testid="stElementContainer"], [data-testid="stPageLink"],
+    [data-testid="stTooltipHoverTarget"], [data-testid="stTooltipIcon"]),
+[class*="st-key-bmt-rail"] [data-testid="stTooltipIcon"] > div {{ width: 100% !important; display: block; }}
+[class*="st-key-bmt-activity"] {{ width: 100%; }}
+[class*="st-key-bmt-activity"] a [data-testid="stIconMaterial"] {{ font-size: 1.4rem; }}
+[class*="st-key-bmt-activity"] a {{
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: .2rem; width: 100%; min-height: 3.4rem; padding: .4rem 0 !important;
+    border-radius: 8px; border: 1px solid transparent; color: {t["text"]}; opacity: .65;
+}}
+[class*="st-key-bmt-activity"] a p {{
+    font-size: .6rem !important; letter-spacing: .01em; margin: 0; white-space: nowrap;
+    text-align: center; line-height: 1;
+}}
+[class*="st-key-bmt-activity"] a:hover {{ background: {t["surface_alt"]}; opacity: 1; }}
+[class*="st-key-bmt-activity-on"] a {{
+    background: {t["primary_soft"]}; color: {t["primary"]}; opacity: 1;
+    border-color: {t["primary"]}; font-weight: 700;
+}}
+[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"][aria-current="page"] {{
+    background: {t["primary_soft"]}; border-left: 3px solid {t["primary"]};
+}}
+</style>
+<div class="bmt-topbar">
+  <div class="bmt-brand-icon">⚡</div>
+  <div class="bmt-brand-text">
+    <span class="bmt-brand-name">Invest SAP</span>
+    <span class="bmt-brand-tag">Vendas &amp; Pendências</span>
+  </div>
+  <span class="bmt-brand-by">SwordPower</span>
+</div>
+"""
+
+
 def apply_custom_theme() -> None:
-    """Injeta o CSS custom + o logo da Blau no cabeçalho fixo da sidebar (acima do menu).
+    """Injeta o CSS custom + o logo da Blau + o tema escolhido + a Topbar SwordPower.
 
     Chamar uma vez só, em `app.py`, antes de `st.navigation(...).run()` — ver docstring
     do módulo pro porquê de bastar uma chamada só e por que é `st.logo()`, não
-    `st.markdown` dentro de `st.sidebar`.
+    `st.markdown` dentro de `st.sidebar`. O tema (Corporativo/Verde Neutro/Cyber Dark/Blau)
+    é o mesmo conjunto do app_template e fica em `st.session_state["app_theme"]`; o seletor
+    é renderizado por `render_theme_selector()` (chamada depois da navegação, no rodapé
+    da sidebar) — aqui só se lê o valor já escolhido.
     """
     st.markdown(_CSS, unsafe_allow_html=True)
+    if _SS_THEME not in st.session_state:
+        from scripts import app_db  # import tardio: evita ciclo e só toca o SQLite se preciso
+
+        padrao = app_db.get_setting("default_theme", DEFAULT_THEME)
+        st.session_state[_SS_THEME] = padrao if padrao in THEMES else DEFAULT_THEME
+    escolhido = st.session_state[_SS_THEME]
+    st.markdown(_theme_css(escolhido), unsafe_allow_html=True)
     st.logo(
         str(_ASSETS_DIR / "blau_logo.png"),
         icon_image=str(_ASSETS_DIR / "blau_icon.png"),
         size="large",
     )
+
+
+def render_theme_selector() -> None:
+    """Seletor de tema na sidebar (mesmos 3 temas do app_template + Blau)."""
+    with st.sidebar:
+        st.selectbox(
+            "Tema",
+            list(THEMES),
+            format_func=lambda k: THEMES[k]["label"],
+            key=_SS_THEME,
+        )
 
 
 def render_filtro_periodo_tipo_cliente(key_prefix: str = "flt") -> None:
@@ -333,7 +523,7 @@ def card_label(text: str) -> None:
     """Rótulo pequeno, em caixa alta, pro topo de um `card()` — uso opcional, quando o
     gráfico/tabela dentro do card não já tem um `st.caption`/`st.subheader` explicando o
     que é (evita rótulo duplicado nesses casos — só chamar quando faltar contexto)."""
-    st.markdown(f'<p class="bmt-card-label">{text}</p>', unsafe_allow_html=True)
+    st.markdown(f'<p class="bmt-card-label">{html.escape(text)}</p>', unsafe_allow_html=True)
 
 
 def render_valor_convertido_brl(

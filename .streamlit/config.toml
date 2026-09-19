@@ -27,3 +27,17 @@ borderColor = "#23272E"
 
 [browser]
 gatherUsageStats = false
+
+# Endurecimento padrão do ecossistema SwordPower (ver app_template/.env.example e
+# ~/.claude/security-review-checklist.md): app internal-only, sem auth própria — a única
+# barreira de rede é escutar só em loopback. Nunca trocar por 0.0.0.0.
+[server]
+address = "127.0.0.1"
+enableXsrfProtection = true
+enableCORS = true
+maxUploadSize = 5
+
+[client]
+# Não vaza traceback/caminho/SQL na tela; o detalhe continua no log do terminal.
+showErrorDetails = "type"
+toolbarMode = "viewer"

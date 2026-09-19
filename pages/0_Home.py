@@ -22,6 +22,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts import app_db  # noqa: E402
 from scripts.query_faturamento_comercial import (  # noqa: E402
     faturamento_por_dimensao,
     faturamento_serie,
@@ -42,6 +43,10 @@ from scripts.ui_theme import card, render_valor_por_moeda  # noqa: E402
 
 st.set_page_config(page_title="Visão Executiva — Vendas", page_icon="🔎", layout="wide")
 
+from scripts.auth import require_login  # noqa: E402
+
+require_login(show_logout=False)  # defesa em profundidade: página aberta direto por URL
+
 st.title(":material/dashboard: Visão Executiva")
 st.caption(
     "Resumo geral pra decisão rápida — números ao vivo de `GOLD.vendas_sap` nas 2 seções "
@@ -56,27 +61,44 @@ st.caption(
     '"Valor em Estoque" (aqui e no ponto de atenção de vencido abaixo) já filtra só centro '
     "em R$ (Brasil) — Uruguai/Colômbia usam moeda local e ficam de fora dessa soma. Ver "
     "**Estoque** para detalhe."
+    + (
+        " Config do Admin também tira as **quantidades** de Uruguai/Colômbia dos totais abaixo."
+        if bool(app_db.get_setting("excluir_estoque_internacional"))
+        else ""
+    )
+    + (
+        " Cliente intercompany (filial \"BLAU*\") excluído por config do Admin nas duas seções."
+        if bool(app_db.get_setting("excluir_intercompany"))
+        else ""
+    )
 )
 
 
 @st.cache_data(ttl=300, show_spinner="Consultando visão executiva...")
-def _dados_executivos() -> dict[str, pd.DataFrame]:
+def _dados_executivos(excluir_internacional: bool, excluir_intercompany: bool) -> dict[str, pd.DataFrame]:
     return {
-        "aging": aging_pendencias(),
-        "estoque_status": pendencia_status_estoque(),
-        "estoque_totais": estoque_totais(),
-        "estoque_validade": estoque_validade_resumo(),
-        "credito_bloqueado": credito_disponivel_clientes(apenas_bloqueados=True),
+        "aging": aging_pendencias(excluir_intercompany=excluir_intercompany),
+        "estoque_status": pendencia_status_estoque(excluir_intercompany=excluir_intercompany),
+        "estoque_totais": estoque_totais(excluir_paises_internacionais=excluir_internacional),
+        "estoque_validade": estoque_validade_resumo(
+            excluir_paises_internacionais=excluir_internacional
+        ),
+        "credito_bloqueado": credito_disponivel_clientes(
+            apenas_bloqueados=True, excluir_intercompany=excluir_intercompany
+        ),
         "devolucoes": devolucoes_credito_motivo(
             data_inicio=datetime.date.today() - datetime.timedelta(days=30),
             data_fim=datetime.date.today(),
             limit=5000,
+            excluir_intercompany=excluir_intercompany,
         ),
-        "faturamento_mensal": faturamento_mensal(meses=12),
+        "faturamento_mensal": faturamento_mensal(meses=12, excluir_intercompany=excluir_intercompany),
     }
 
 
-dados = _dados_executivos()
+excluir_internacional = bool(app_db.get_setting("excluir_estoque_internacional"))
+excluir_intercompany = bool(app_db.get_setting("excluir_intercompany"))
+dados = _dados_executivos(excluir_internacional, excluir_intercompany)
 df_aging = dados["aging"]
 df_estoque_status = dados["estoque_status"]
 df_estoque_totais = dados["estoque_totais"]

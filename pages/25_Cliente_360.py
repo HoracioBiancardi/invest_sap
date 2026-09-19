@@ -14,10 +14,15 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts import app_db  # noqa: E402
 from scripts.query_vendas_sap import buscar_cliente_por_nome, cliente_360, top_clientes_pendentes  # noqa: E402
 from scripts.ui_theme import card, render_valor_por_moeda  # noqa: E402
 
 st.set_page_config(page_title="Cliente 360 — Vendas SAP", page_icon="🏥", layout="wide")
+
+from scripts.auth import require_login  # noqa: E402
+
+require_login(show_logout=False)  # defesa em profundidade: página aberta direto por URL
 st.title(":material/account_circle: Cliente 360")
 st.caption(
     "Busque pelo nome (parcial) pra achar o código, ou informe o `Codigo_Cliente` "
@@ -32,8 +37,8 @@ def _busca_nome_cached(nome_fragmento: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=600, show_spinner="Consultando top clientes por pendência...")
-def _top_clientes_cached(n: int) -> pd.DataFrame:
-    return top_clientes_pendentes(n=n)
+def _top_clientes_cached(n: int, excluir_intercompany: bool) -> pd.DataFrame:
+    return top_clientes_pendentes(n=n, excluir_intercompany=excluir_intercompany)
 
 
 def _selecionar_cliente_da_busca() -> None:
@@ -69,8 +74,17 @@ with col_check:
     somente_pendente = st.checkbox("Só backlog aberto (aba Pedido)", value=False, key="cliente360_somente_pendente")
 
 if not codigo_cliente:
-    st.caption("Ou escolha direto um dos clientes com mais pendência (clique numa linha):")
-    df_top_clientes = _top_clientes_cached(10)
+    excluir_intercompany = bool(app_db.get_setting("excluir_intercompany"))
+    st.caption(
+        "Ou escolha direto um dos clientes com mais pendência (clique numa linha)"
+        + (
+            " — filiais intercompany (\"BLAU*\") excluídas por config do Admin, "
+            "busque pelo nome acima se precisar de uma delas:"
+            if excluir_intercompany
+            else ":"
+        )
+    )
+    df_top_clientes = _top_clientes_cached(10, excluir_intercompany)
     if not df_top_clientes.empty:
 
         def _ao_selecionar_top_cliente() -> None:

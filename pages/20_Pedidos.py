@@ -39,11 +39,17 @@ from scripts.trace_pedido import trace_pedido  # noqa: E402
 from scripts.ui_theme import card, render_filtro_tipo_cliente  # noqa: E402
 
 st.set_page_config(page_title="Pedidos — Vendas SAP", page_icon="📦", layout="wide")
+
+from scripts import app_db  # noqa: E402
+from scripts.auth import require_login  # noqa: E402
+
+require_login(show_logout=False)  # defesa em profundidade: página aberta direto por URL
 st.title(":material/receipt_long: Pedidos")
 
 render_filtro_tipo_cliente()
 tipo_cliente_opcao = st.session_state.get("flt_tipo_cliente", "Todos")
 tipo_cliente = None if tipo_cliente_opcao == "Todos" else tipo_cliente_opcao
+excluir_intercompany = bool(app_db.get_setting("excluir_intercompany"))
 
 tab_geral, tab_buscar = st.tabs(["Visão geral", "Buscar pedido"])
 
@@ -52,6 +58,11 @@ with tab_geral:
         f"Usando filtro global de tipo de cliente: **{tipo_cliente_opcao}** (ajuste no "
         "sidebar). O período (dias) do filtro global **não** se aplica ao backlog aberto de "
         "propósito — ele existe pra mostrar tudo em aberto, inclusive o que é antigo."
+        + (
+            " Cliente intercompany (filial \"BLAU*\") excluído por config do Admin."
+            if excluir_intercompany
+            else ""
+        )
     )
 
     _cache = st.cache_data(ttl=300)
@@ -64,7 +75,7 @@ with tab_geral:
     _pendencias_abertas_cached = _cache(pendencias_abertas)
     _reservado_cached = _cache(estoque_reservado_por_material_centro)
 
-    df_aging = _aging_cached(tipo_cliente=tipo_cliente)
+    df_aging = _aging_cached(tipo_cliente=tipo_cliente, excluir_intercompany=excluir_intercompany)
     st.subheader("Aging do backlog aberto")
     with card("pedidos-aging"):
         col1, col2 = st.columns([1, 1])
@@ -91,7 +102,7 @@ with tab_geral:
         "Filtro de tipo de cliente do sidebar não se aplica aqui (mesmo motivo do aging acima: "
         "propósito é mostrar todo backlog aberto, inclusive o antigo)."
     )
-    df_backlog_raw = _pendencias_abertas_cached()
+    df_backlog_raw = _pendencias_abertas_cached(excluir_intercompany=excluir_intercompany)
     df_reservado = _reservado_cached()
 
     if df_backlog_raw.empty:
@@ -100,7 +111,8 @@ with tab_geral:
         df_backlog = df_backlog_raw[df_backlog_raw["Qtd_Pendente_Remessa"] > 0].copy()
         limiar_zumbi_dias = st.number_input(
             "Considerar backlog \"recente\" até quantos dias (o resto entra como possível pedido zumbi)",
-            min_value=30, max_value=3650, value=365, step=30, key="pedidos_limiar_zumbi",
+            min_value=30, max_value=3650, value=int(app_db.get_setting("limiar_zumbi_dias")), step=30,
+            key="pedidos_limiar_zumbi",
         )
         df_backlog["Backlog_Antigo"] = df_backlog["Dias_Desde_Inclusao_Pedido"] > limiar_zumbi_dias
 
@@ -212,7 +224,7 @@ with tab_geral:
 
     st.divider()
 
-    df_estoque = _estoque_cached(tipo_cliente=tipo_cliente)
+    df_estoque = _estoque_cached(tipo_cliente=tipo_cliente, excluir_intercompany=excluir_intercompany)
     st.subheader("Backlog por cobertura de estoque")
     st.caption(
         "`Status_Pendencia_Estoque` compara quantidade pendente com "
@@ -235,7 +247,9 @@ with tab_geral:
     st.subheader("Top clientes por valor pendente")
     st.caption("`Valor_Pendente_Total` soma só pedidos em BRL, pra não misturar moeda.")
     n = st.slider("Quantos clientes mostrar", min_value=5, max_value=50, value=20, step=5, key="pedidos_top_n")
-    df_clientes_pendentes = _top_clientes_cached(n, tipo_cliente=tipo_cliente)
+    df_clientes_pendentes = _top_clientes_cached(
+        n, tipo_cliente=tipo_cliente, excluir_intercompany=excluir_intercompany
+    )
     with card("pedidos-top-clientes-pendentes"):
         st.dataframe(df_clientes_pendentes, width="stretch", hide_index=True)
 
@@ -247,7 +261,7 @@ with tab_geral:
         "disponível nesta base. `Valor_Pendente_Total` soma só pedidos em BRL, pra não "
         "misturar moeda."
     )
-    df_tipo_ordem = _tipo_ordem_cached(tipo_cliente=tipo_cliente)
+    df_tipo_ordem = _tipo_ordem_cached(tipo_cliente=tipo_cliente, excluir_intercompany=excluir_intercompany)
     with card("pedidos-tipo-ordem"):
         col3, col4 = st.columns([1, 1])
         with col3:
@@ -269,7 +283,7 @@ with tab_geral:
     meses = st.slider("Janela (meses)", min_value=6, max_value=36, value=12, step=1, key="pedidos_meses")
     hoje = datetime.date.today()
     data_inicio_mensal = (hoje.replace(day=1) - pd.DateOffset(months=meses - 1)).date()
-    df_mensal = _pedidos_mensal_cached(int(meses))
+    df_mensal = _pedidos_mensal_cached(int(meses), excluir_intercompany=excluir_intercompany)
     if df_mensal.empty:
         st.info("Sem pedidos no período.")
     else:
@@ -297,7 +311,9 @@ with tab_geral:
         "período não aparece aqui, pra não misturar moeda no valor médio."
     )
     n_clientes = st.slider("Quantos clientes mostrar", min_value=5, max_value=50, value=20, step=5, key="pedidos_ranking_n")
-    df_ranking_clientes = _pedidos_cliente_cached(data_inicio_mensal, hoje, n_clientes, tipo_cliente)
+    df_ranking_clientes = _pedidos_cliente_cached(
+        data_inicio_mensal, hoje, n_clientes, tipo_cliente, excluir_intercompany
+    )
     if df_ranking_clientes.empty:
         st.info("Nada encontrado para esse período/filtro.")
     else:

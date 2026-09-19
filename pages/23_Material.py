@@ -23,6 +23,10 @@ from scripts.query_vendas_sap import ficha_material, materiais_catalogo  # noqa:
 from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Material — Vendas SAP", page_icon="🧪", layout="wide")
+
+from scripts.auth import require_login  # noqa: E402
+
+require_login(show_logout=False)  # defesa em profundidade: página aberta direto por URL
 st.title(":material/inventory: Material: ficha de cadastro")
 st.caption(
     "Dado cadastral do material (`dim_material_sap`) — descrição, tipo, status, unidade "

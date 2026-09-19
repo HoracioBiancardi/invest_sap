@@ -245,3 +245,9 @@ uv.lock
 
 # Claude Code: lock de sessão local (PID/timestamp da máquina, não é config de projeto)
 .claude/*.lock
+
+# Chave de acesso gerada automaticamente (scripts/auth.py)
+.access_key
+
+# Banco local do app (usuários/configurações/ajustes) — nunca commitar
+data/

@@ -22,6 +22,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts import app_db  # noqa: E402
 from scripts.query_vendas_sap import (  # noqa: E402
     converter_para_brl,
     devolucoes_mensal,
@@ -37,6 +38,10 @@ from scripts.ui_theme import (  # noqa: E402
 )
 
 st.set_page_config(page_title="Faturamento — Vendas SAP", page_icon="💰", layout="wide")
+
+from scripts.auth import require_login  # noqa: E402
+
+require_login(show_logout=False)  # defesa em profundidade: página aberta direto por URL
 st.title(":material/payments: Faturamento")
 
 render_filtro_periodo_tipo_cliente()
@@ -44,18 +49,38 @@ tipo_cliente_opcao = st.session_state.get("flt_tipo_cliente", "Todos")
 tipo_cliente = None if tipo_cliente_opcao == "Todos" else tipo_cliente_opcao
 data_inicio = st.session_state.get("flt_data_inicio", datetime.date.today() - datetime.timedelta(days=30))
 data_fim = st.session_state.get("flt_data_fim", datetime.date.today())
+excluir_intercompany = bool(app_db.get_setting("excluir_intercompany"))
+excluir_org_vendas_internacional = bool(app_db.get_setting("excluir_org_vendas_internacional"))
 st.caption(
     f"Filtro: período de **{data_inicio:%d/%m/%Y}** a **{data_fim:%d/%m/%Y}**, "
     f"tipo de cliente **{tipo_cliente_opcao}**. A série mensal abaixo ignora esse período "
     "de propósito (mostra tendência de mais longo prazo)."
+    + (
+        " Cliente intercompany (filial \"BLAU*\") excluído por config do Admin."
+        if excluir_intercompany
+        else ""
+    )
+    + (
+        " Organização de Vendas Colômbia/Uruguai excluída por config do Admin (só na aba "
+        "Org Vendas x Linha de Negócio)."
+        if excluir_org_vendas_internacional
+        else ""
+    )
 )
 
 tab_resumo, tab_tendencia = st.tabs(["Org Vendas x Linha de Negócio", "Tendência mensal"])
 
 
 @st.cache_data(ttl=300, show_spinner="Consultando faturamento por Org Vendas x Linha de Negócio...")
-def _faturamento_org_cached(data_inicio: datetime.date, data_fim: datetime.date, tipo_cliente: Optional[str]) -> pd.DataFrame:
-    return faturamento_por_org_vendas_linha_negocio(data_inicio=data_inicio, data_fim=data_fim, tipo_cliente=tipo_cliente)
+def _faturamento_org_cached(
+    data_inicio: datetime.date, data_fim: datetime.date, tipo_cliente: Optional[str],
+    excluir_intercompany: bool, excluir_org_vendas_internacional: bool,
+) -> pd.DataFrame:
+    return faturamento_por_org_vendas_linha_negocio(
+        data_inicio=data_inicio, data_fim=data_fim, tipo_cliente=tipo_cliente,
+        excluir_intercompany=excluir_intercompany,
+        excluir_org_vendas_internacional=excluir_org_vendas_internacional,
+    )
 
 
 with tab_resumo:
@@ -65,7 +90,9 @@ with tab_resumo:
         "produto dominante (eleva pra ~87%) — coluna `Origem_Linha_Negocio` no detalhe indica "
         "qual camada resolveu cada linha. São 2 dimensões independentes, não uma hierarquia."
     )
-    df_org = _faturamento_org_cached(data_inicio, data_fim, tipo_cliente)
+    df_org = _faturamento_org_cached(
+        data_inicio, data_fim, tipo_cliente, excluir_intercompany, excluir_org_vendas_internacional
+    )
     if df_org.empty:
         st.info("Nada encontrado para esse período.")
     else:
@@ -124,10 +151,13 @@ with tab_tendencia:
     meses = st.slider("Período (meses)", min_value=6, max_value=60, value=24, step=6, key="faturamento_meses")
 
     @st.cache_data(ttl=1800, show_spinner="Consultando histórico...")
-    def _historico_cached(meses: int) -> dict[str, pd.DataFrame]:
-        return {"faturamento": faturamento_mensal(meses=meses), "devolucoes": devolucoes_mensal(meses=meses)}
+    def _historico_cached(meses: int, excluir_intercompany: bool) -> dict[str, pd.DataFrame]:
+        return {
+            "faturamento": faturamento_mensal(meses=meses, excluir_intercompany=excluir_intercompany),
+            "devolucoes": devolucoes_mensal(meses=meses, excluir_intercompany=excluir_intercompany),
+        }
 
-    dados = _historico_cached(int(meses))
+    dados = _historico_cached(int(meses), excluir_intercompany)
     df_fat = dados["faturamento"]
     df_dev = dados["devolucoes"]
 

@@ -28,6 +28,10 @@ from scripts.query_vendas_sap import (  # noqa: E402
 from scripts.ui_theme import card, render_filtro_periodo_tipo_cliente, render_valor_por_moeda  # noqa: E402
 
 st.set_page_config(page_title="Visão do Vendedor — Vendas SAP", page_icon="🧑‍💼", layout="wide")
+
+from scripts.auth import require_login  # noqa: E402
+
+require_login(show_logout=False)  # defesa em profundidade: página aberta direto por URL
 st.title(":material/badge: Visão do Vendedor")
 st.caption(
     "Fonte: `GOLD.vendas_sap.fct_faturamento_itens_sap.Codigo_Vendedor`, nome via "

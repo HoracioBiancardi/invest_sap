@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import pandas as pd
 import streamlit as st
@@ -22,6 +22,10 @@ from scripts.ui_charts_comercial import grafico_meta_realizado  # noqa: E402
 from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Meta x Realizado — Vendas SAP", page_icon="🎯", layout="wide")
+
+from scripts.auth import require_login  # noqa: E402
+
+require_login(show_logout=False)  # defesa em profundidade: página aberta direto por URL
 st.title(":material/track_changes: Meta x Realizado")
 st.caption(
     "Meta vem de `vendas.fat_meta_equipe` — planejamento comercial (SharePoint, mês x "
@@ -35,14 +39,17 @@ st.caption(
 )
 
 meses = st.slider("Período (meses)", min_value=3, max_value=24, value=8, step=1)
-bu_opcao = st.selectbox(
-    "BU", ["Todas", "ONCO-HEMATO", "FARMA", "BLAU AESTHETICS", "MS", "Botulift"], index=0
+bu_opcoes = st.multiselect(
+    "BU",
+    ["ONCO-HEMATO", "FARMA", "BLAU AESTHETICS", "MS", "Botulift"],
+    default=[],
+    help="Vazio = todas.",
 )
-bu = None if bu_opcao == "Todas" else bu_opcao
+bu = tuple(sorted(bu_opcoes)) or None
 
 
 @st.cache_data(ttl=900, show_spinner="Consultando meta x realizado...")
-def _meta_cached(meses: int, bu: Optional[str]) -> pd.DataFrame:
+def _meta_cached(meses: int, bu: Optional[Sequence[str]]) -> pd.DataFrame:
     import datetime
 
     data_fim = datetime.date.today()

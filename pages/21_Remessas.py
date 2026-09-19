@@ -19,11 +19,16 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts import app_db  # noqa: E402
 from scripts.query_vendas_sap import remessas, remessas_resumo  # noqa: E402
 from scripts.ui_filtros_executivo import render_filtros_executivo  # noqa: E402
 from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Remessas — Vendas SAP", page_icon="🚚", layout="wide")
+
+from scripts.auth import require_login  # noqa: E402
+
+require_login(show_logout=False)  # defesa em profundidade: página aberta direto por URL
 st.title(":material/local_shipping: Remessas")
 st.caption(
     "Fonte: `GOLD.vendas_sap.fct_remessa_itens_sap` (LIKP/LIPS — grão Entrega+Item). Os "
@@ -54,16 +59,20 @@ st.caption(
 filtros = render_filtros_executivo("remessas", mostrar_pedido=True, mostrar_material=True)
 numero_pedido = filtros.get("numero_pedido")
 codigo_produto = filtros.get("codigo_produto")
+excluir_intercompany = bool(app_db.get_setting("excluir_intercompany"))
+if excluir_intercompany:
+    st.caption("Cliente intercompany (filial \"BLAU*\") excluído por config do Admin.")
 
 
 @st.cache_data(ttl=300, show_spinner="Consultando resumo de remessas...")
-def _resumo_cached(data_inicio: datetime.date, data_fim: datetime.date) -> pd.DataFrame:
-    return remessas_resumo(data_inicio=data_inicio, data_fim=data_fim)
+def _resumo_cached(data_inicio: datetime.date, data_fim: datetime.date, excluir_intercompany: bool) -> pd.DataFrame:
+    return remessas_resumo(data_inicio=data_inicio, data_fim=data_fim, excluir_intercompany=excluir_intercompany)
 
 
 @st.cache_data(ttl=300, show_spinner="Consultando remessas...")
 def _remessas_cached(
-    numero_pedido: Optional[str], codigo_produto: Optional[str], data_inicio: datetime.date, data_fim: datetime.date
+    numero_pedido: Optional[str], codigo_produto: Optional[str], data_inicio: datetime.date,
+    data_fim: datetime.date, excluir_intercompany: bool,
 ) -> pd.DataFrame:
     return remessas(
         numero_pedido=numero_pedido,
@@ -71,10 +80,11 @@ def _remessas_cached(
         data_inicio=data_inicio,
         data_fim=data_fim,
         limit=2000,
+        excluir_intercompany=excluir_intercompany,
     )
 
 
-df_resumo = _resumo_cached(data_inicio, data_fim)
+df_resumo = _resumo_cached(data_inicio, data_fim, excluir_intercompany)
 
 st.subheader("Volume por Tipo de Remessa x Centro")
 with card("remessas-resumo"):
@@ -95,7 +105,7 @@ with card("remessas-resumo"):
 st.divider()
 
 st.subheader("Detalhe (item a item)")
-df_detalhe = _remessas_cached(numero_pedido, codigo_produto, data_inicio, data_fim)
+df_detalhe = _remessas_cached(numero_pedido, codigo_produto, data_inicio, data_fim, excluir_intercompany)
 with card("remessas-detalhe"):
     if df_detalhe.empty:
         st.info("Nada encontrado para esse filtro.")

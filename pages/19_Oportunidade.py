@@ -23,11 +23,16 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts import app_db  # noqa: E402
 from scripts.query_vendas_sap import correlacao_oportunidade_pedido_pendencia_fatura  # noqa: E402
 from scripts.ui_filtros_executivo import render_filtros_executivo  # noqa: E402
 from scripts.ui_theme import card, render_filtro_periodo_tipo_cliente, render_valor_por_moeda  # noqa: E402
 
 st.set_page_config(page_title="Oportunidade — Vendas SAP", page_icon="🎯", layout="wide")
+
+from scripts.auth import require_login  # noqa: E402
+
+require_login(show_logout=False)  # defesa em profundidade: página aberta direto por URL
 st.title(":material/target: Oportunidade")
 st.caption(
     "Funil da Oportunidade (Salesforce): estágio, ganha x não ganha, aging de oportunidade "
@@ -41,9 +46,15 @@ render_filtro_periodo_tipo_cliente()
 data_inicio = st.session_state.get("flt_data_inicio", datetime.date.today() - datetime.timedelta(days=30))
 data_fim = st.session_state.get("flt_data_fim", datetime.date.today())
 tipo_cliente_opcao = st.session_state.get("flt_tipo_cliente", "Todos")
+excluir_intercompany = bool(app_db.get_setting("excluir_intercompany"))
 st.caption(
     f"Filtro: período de **{data_inicio:%d/%m/%Y}** a **{data_fim:%d/%m/%Y}**, "
     f"tipo de cliente **{tipo_cliente_opcao}**."
+    + (
+        " Cliente intercompany (filial \"BLAU*\") excluído por config do Admin."
+        if excluir_intercompany
+        else ""
+    )
 )
 
 filtros = render_filtros_executivo("oportunidade", mostrar_pedido=True)
@@ -54,7 +65,8 @@ SAFETY_LIMIT = 20000
 
 @st.cache_data(ttl=300, show_spinner="Consultando Oportunidade → Pedido → Pendência → Fatura...")
 def _dados_cached(
-    data_inicio: datetime.date, data_fim: datetime.date, numero_pedido: Optional[str], tipo_cliente: Optional[str]
+    data_inicio: datetime.date, data_fim: datetime.date, numero_pedido: Optional[str],
+    tipo_cliente: Optional[str], excluir_intercompany: bool,
 ) -> pd.DataFrame:
     return correlacao_oportunidade_pedido_pendencia_fatura(
         data_inicio=data_inicio,
@@ -63,10 +75,15 @@ def _dados_cached(
         numero_pedido=numero_pedido,
         tipo_cliente=tipo_cliente,
         limit=SAFETY_LIMIT,
+        excluir_intercompany=excluir_intercompany,
     )
 
 
-df = _dados_cached(data_inicio, data_fim, numero_pedido, None if tipo_cliente_opcao == "Todos" else tipo_cliente_opcao)
+df = _dados_cached(
+    data_inicio, data_fim, numero_pedido,
+    None if tipo_cliente_opcao == "Todos" else tipo_cliente_opcao,
+    excluir_intercompany,
+)
 
 if df.empty:
     st.info("Nada encontrado para esse filtro.")

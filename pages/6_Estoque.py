@@ -15,6 +15,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts import app_db  # noqa: E402
 from scripts.query_vendas_sap import (  # noqa: E402
     estoque_restrito_disponivel,
     estoque_validade,
@@ -24,6 +25,10 @@ from scripts.trace_lote import trace_lote  # noqa: E402
 from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Estoque — Vendas SAP", page_icon="📦", layout="wide")
+
+from scripts.auth import require_login  # noqa: E402
+
+require_login(show_logout=False)  # defesa em profundidade: página aberta direto por URL
 st.title(":material/inventory_2: Estoque")
 st.caption(
     "Fonte: `GOLD.vendas_sap.fct_estoque_lote_sap`. O filtro global do sidebar não se "
@@ -64,6 +69,12 @@ with col4:
 produto_acabado = {"Todos": None, "Acabado": True, "Não Acabado": False}[produto_acabado_opcao]
 pais_centro = PAISES.get(pais_opcao)
 codigo_material = codigo_material.strip().upper() or None
+excluir_internacional = bool(app_db.get_setting("excluir_estoque_internacional"))
+if excluir_internacional and not pais_centro:
+    st.caption(
+        "Config do Admin: estoque de Uruguai/Colômbia excluído das quantidades acima "
+        "(selecione o País pra ver eles mesmo assim)."
+    )
 
 tab_restrito, tab_validade, tab_rastreio = st.tabs(
     ["Restrito x Disponível", "Validade dos lotes", "Rastreio de Lote"]
@@ -72,7 +83,8 @@ tab_restrito, tab_validade, tab_rastreio = st.tabs(
 
 @st.cache_data(ttl=300, show_spinner="Consultando estoque...")
 def _estoque_cached(
-    codigo_centro: Optional[str], codigo_material: Optional[str], produto_acabado: Optional[bool], pais_centro: Optional[str]
+    codigo_centro: Optional[str], codigo_material: Optional[str], produto_acabado: Optional[bool],
+    pais_centro: Optional[str], excluir_internacional: bool,
 ) -> pd.DataFrame:
     return estoque_restrito_disponivel(
         codigo_centro=codigo_centro,
@@ -80,21 +92,34 @@ def _estoque_cached(
         produto_acabado=produto_acabado,
         pais_centro=pais_centro,
         limit=2000,
+        excluir_paises_internacionais=excluir_internacional,
     )
 
 
 @st.cache_data(ttl=300, show_spinner="Consultando validade dos lotes...")
-def _validade_resumo_cached(codigo_centro: Optional[str], produto_acabado: Optional[bool], pais_centro: Optional[str]) -> pd.DataFrame:
-    return estoque_validade_resumo(codigo_centro=codigo_centro, produto_acabado=produto_acabado, pais_centro=pais_centro)
+def _validade_resumo_cached(
+    codigo_centro: Optional[str], produto_acabado: Optional[bool], pais_centro: Optional[str],
+    excluir_internacional: bool,
+) -> pd.DataFrame:
+    return estoque_validade_resumo(
+        codigo_centro=codigo_centro, produto_acabado=produto_acabado, pais_centro=pais_centro,
+        excluir_paises_internacionais=excluir_internacional,
+    )
 
 
 @st.cache_data(ttl=300, show_spinner="Consultando lotes mais urgentes...")
-def _validade_detalhe_cached(codigo_centro: Optional[str], produto_acabado: Optional[bool], pais_centro: Optional[str]) -> pd.DataFrame:
-    return estoque_validade(codigo_centro=codigo_centro, produto_acabado=produto_acabado, pais_centro=pais_centro, limit=2000)
+def _validade_detalhe_cached(
+    codigo_centro: Optional[str], produto_acabado: Optional[bool], pais_centro: Optional[str],
+    excluir_internacional: bool,
+) -> pd.DataFrame:
+    return estoque_validade(
+        codigo_centro=codigo_centro, produto_acabado=produto_acabado, pais_centro=pais_centro,
+        limit=2000, excluir_paises_internacionais=excluir_internacional,
+    )
 
 
 with tab_restrito:
-    df = _estoque_cached(codigo_centro or None, codigo_material, produto_acabado, pais_centro)
+    df = _estoque_cached(codigo_centro or None, codigo_material, produto_acabado, pais_centro, excluir_internacional)
 
     if df.empty:
         st.info("Nada encontrado para esse filtro.")
@@ -245,7 +270,7 @@ with tab_validade:
     FAIXAS_VALIDADE = ["Vencido", "0-30 dias", "31-90 dias", "91-180 dias", "180+ dias"]
     MOEDA_POR_PAIS = {"BR": "BRL", "UY": "UYU", "CO": "COP", "DE": "EUR"}
 
-    df_resumo = _validade_resumo_cached(codigo_centro or None, produto_acabado, pais_centro)
+    df_resumo = _validade_resumo_cached(codigo_centro or None, produto_acabado, pais_centro, excluir_internacional)
     if df_resumo.empty:
         st.info("Nenhum lote com validade cadastrada nesse filtro.")
     else:
@@ -295,7 +320,7 @@ with tab_validade:
                 "Linhas exibidas", min_value=20, max_value=500, value=100, step=20,
                 key="estoque_linhas_validade",
             )
-        df_detalhe = _validade_detalhe_cached(codigo_centro or None, produto_acabado, pais_centro)
+        df_detalhe = _validade_detalhe_cached(codigo_centro or None, produto_acabado, pais_centro, excluir_internacional)
         colunas_validade = [
             "Codigo_Material", "Descricao_Material", "Status_Material", "Numero_Lote",
             "Codigo_Centro", "Nome_Centro", "Moeda",

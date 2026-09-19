@@ -18,10 +18,15 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts import app_db  # noqa: E402
 from scripts.query_vendas_sap import credito_disponivel_clientes, devolucoes_credito_motivo  # noqa: E402
 from scripts.ui_theme import card, render_filtro_periodo_tipo_cliente  # noqa: E402
 
 st.set_page_config(page_title="Crédito e Devoluções — Vendas SAP", page_icon="💳", layout="wide")
+
+from scripts.auth import require_login  # noqa: E402
+
+require_login(show_logout=False)  # defesa em profundidade: página aberta direto por URL
 st.title(":material/credit_card: Crédito e Devoluções")
 
 render_filtro_periodo_tipo_cliente()
@@ -29,14 +34,27 @@ tipo_cliente_opcao = st.session_state.get("flt_tipo_cliente", "Todos")
 tipo_cliente = None if tipo_cliente_opcao == "Todos" else tipo_cliente_opcao
 data_inicio_global = st.session_state.get("flt_data_inicio", datetime.date.today() - datetime.timedelta(days=30))
 data_fim_global = st.session_state.get("flt_data_fim", datetime.date.today())
-st.caption(f"Filtro: tipo de cliente **{tipo_cliente_opcao}**.")
+excluir_intercompany = bool(app_db.get_setting("excluir_intercompany"))
+st.caption(
+    f"Filtro: tipo de cliente **{tipo_cliente_opcao}**."
+    + (
+        " Cliente intercompany (filial \"BLAU*\") excluído por config do Admin."
+        if excluir_intercompany
+        else ""
+    )
+)
 
 tab_limite, tab_devolucao = st.tabs(["Limite de crédito", "Devoluções / abatimentos (com motivo)"])
 
 
 @st.cache_data(ttl=300, show_spinner="Consultando limite de crédito...")
-def _credito_cached(apenas_bloqueados: bool, tipo_cliente: Optional[str], limite: int) -> pd.DataFrame:
-    return credito_disponivel_clientes(apenas_bloqueados, tipo_cliente=tipo_cliente, limit=limite)
+def _credito_cached(
+    apenas_bloqueados: bool, tipo_cliente: Optional[str], limite: int, excluir_intercompany: bool
+) -> pd.DataFrame:
+    return credito_disponivel_clientes(
+        apenas_bloqueados, tipo_cliente=tipo_cliente, limit=limite,
+        excluir_intercompany=excluir_intercompany,
+    )
 
 
 @st.cache_data(ttl=300, show_spinner="Consultando devoluções/abatimentos...")
@@ -46,10 +64,12 @@ def _devolucoes_cached(
     excluir_rv: bool,
     nome_cliente: Optional[str],
     tipo_cliente: Optional[str],
+    excluir_intercompany: bool,
 ) -> pd.DataFrame:
     return devolucoes_credito_motivo(
         data_inicio=data_inicio, data_fim=data_fim, excluir_faturamento_rotina=excluir_rv,
         nome_cliente=nome_cliente, tipo_cliente=tipo_cliente, limit=5000,
+        excluir_intercompany=excluir_intercompany,
     )
 
 
@@ -58,7 +78,7 @@ with tab_limite:
     apenas_bloqueados = st.checkbox("Só clientes bloqueados", value=False)
     limite_credito = st.slider("Máximo de linhas", min_value=100, max_value=20000, value=5000, step=100)
 
-    df_credito = _credito_cached(apenas_bloqueados, tipo_cliente, limite_credito)
+    df_credito = _credito_cached(apenas_bloqueados, tipo_cliente, limite_credito, excluir_intercompany)
     if df_credito.empty:
         st.info("Nada encontrado.")
     else:
@@ -101,7 +121,10 @@ with tab_devolucao:
         incluir_rv = st.checkbox("Incluir faturamento de rotina (RV)", value=False)
     st.caption(f"Período: **{data_inicio_global:%d/%m/%Y}** a **{data_fim_global:%d/%m/%Y}** — vem do filtro global no sidebar.")
 
-    df_dev = _devolucoes_cached(data_inicio_global, data_fim_global, not incluir_rv, nome_cliente or None, tipo_cliente)
+    df_dev = _devolucoes_cached(
+        data_inicio_global, data_fim_global, not incluir_rv, nome_cliente or None, tipo_cliente,
+        excluir_intercompany,
+    )
     if df_dev.empty:
         st.info("Nada encontrado para esse filtro.")
     else:

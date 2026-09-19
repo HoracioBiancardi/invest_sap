@@ -48,12 +48,17 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts import app_db  # noqa: E402
 from scripts.query_vendas_sap import (  # noqa: E402
     CLIENTE_INTERCOMPANY_LIKE,
+    ORG_VENDAS_INTERNACIONAL_LIKE,
     chave_org_vda_cli_pandas,
     correlacao_oportunidade_pedido_pendencia_fatura,
     credito_disponivel_clientes,
+    estoque_reservado_por_material_centro,
     estoque_restrito_disponivel,
+    flag_intercompany,
+    flag_org_vendas_internacional,
     linha_negocio_por_cliente,
     movimento_estoque_resumo_material_centro,
     organizacoes_vendas_texto,
@@ -64,7 +69,11 @@ from scripts.trace_lote import estoque_historico_material_centro  # noqa: E402
 from scripts.ui_theme import card  # noqa: E402
 
 st.set_page_config(page_title="Pendência x Estoque — Vendas SAP", page_icon="🧩", layout="wide")
-st.title(":material/fact_check: Pendência x Estoque: visão global")
+
+from scripts.auth import require_login  # noqa: E402
+
+require_login(show_logout=False)  # defesa em profundidade: página aberta direto por URL
+st.title(":material/fact_check: Pendência x Estoque")
 st.caption(
     "Todo o backlog aberto (`Flag_Pendencia = 1`), classificado por `Motivo_Principal` "
     "— cruza `Status_Pendencia_Estoque` (item vs. estoque do Material+Centro), crédito "
@@ -90,15 +99,20 @@ def _linha_negocio_cached() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300, show_spinner="Consultando estoque restrito x disponível (todos os materiais)...")
-def _estoque_cached() -> pd.DataFrame:
+def _estoque_cached(excluir_internacional: bool) -> pd.DataFrame:
     # limit alto o bastante pra trazer todo Material+Centro com estoque físico > 0, não só
     # os top N por valor financeiro (default da função é 500, pensado pra tela de Estoque).
-    return estoque_restrito_disponivel(limit=100_000)
+    return estoque_restrito_disponivel(limit=100_000, excluir_paises_internacionais=excluir_internacional)
 
 
 @st.cache_data(ttl=1800, show_spinner="Consultando histórico de movimento (MSEG/MKPF, pode demorar)...")
 def _movimento_cached() -> pd.DataFrame:
     return movimento_estoque_resumo_material_centro(meses=24)
+
+
+@st.cache_data(ttl=1800, show_spinner="Consultando reserva SAP (VBBE) por Material+Centro...")
+def _reservado_cached() -> pd.DataFrame:
+    return estoque_reservado_por_material_centro()
 
 
 @st.cache_data(ttl=3600, show_spinner="Consultando estoque real na data do pedido (IB_SAPECC.MCHBH, ~5-10s)...")
@@ -177,7 +191,42 @@ else:
     df["Nome_Org_Vendas"] = df["Nome_Org_Vendas"].fillna(df["Codigo_Org_Vendas"])
     df["Motivo_Principal"] = df.apply(_classificar_motivo_principal, axis=1)
 
-    df["Flag_Intercompany"] = df["Nome_Cliente"].str.contains(CLIENTE_INTERCOMPANY_LIKE, case=False, na=False)
+    df["Flag_Intercompany"] = flag_intercompany(df["Nome_Cliente"])
+    df["Flag_Org_Internacional"] = flag_org_vendas_internacional(df["Nome_Org_Vendas"])
+
+    # Possivel_Zumbi: propriedade intrínseca do Material+Centro (não do item/pedido nem do
+    # filtro ad-hoc da tela) — calculada 1x aqui, sobre TODO o backlog "Sem Estoque"/
+    # "Estoque Parcial" (antes de qualquer filtro de Org/Linha/Motivo/Centro/Material/
+    # Cliente), pra não oscilar dependendo do que o usuário filtrou depois. Mesma lógica do
+    # ranking por material (ver `_classificar_causa_estoque_material`), só que aplicada
+    # cedo o bastante pra também valer nos KPIs/pivots do topo, não só no ranking.
+    limiar_zumbi_dias = int(app_db.get_setting("limiar_zumbi_dias"))
+    df_sem_estoque_mc = df[df["Motivo_Principal"].isin(["Sem Estoque", "Estoque Parcial"])]
+    _zumbi_lookup = (
+        df_sem_estoque_mc.groupby(["Codigo_Produto", "Codigo_Centro"])
+        .agg(
+            Dias_Pedido_Mais_Antigo=("Dias_Desde_Inclusao_Pedido", "max"),
+            Qtd_Sem_Estoque_Material=("Qtd_Pendente_Operacional", "sum"),
+        )
+        .reset_index()
+        .merge(_reservado_cached(), on=["Codigo_Produto", "Codigo_Centro"], how="left")
+    )
+    _zumbi_lookup["Qtd_Reservada"] = _zumbi_lookup["Qtd_Reservada"].fillna(0)
+    _zumbi_lookup["Possivel_Zumbi"] = (_zumbi_lookup["Dias_Pedido_Mais_Antigo"] > limiar_zumbi_dias) & (
+        _zumbi_lookup["Qtd_Reservada"] < _zumbi_lookup["Qtd_Sem_Estoque_Material"]
+    )
+    df = df.merge(
+        _zumbi_lookup[["Codigo_Produto", "Codigo_Centro", "Dias_Pedido_Mais_Antigo", "Qtd_Reservada", "Possivel_Zumbi"]],
+        on=["Codigo_Produto", "Codigo_Centro"],
+        how="left",
+    )
+    # .fillna(False) sozinho não basta: o merge left introduz NaN pra Material+Centro sem
+    # match, o que deixa a coluna dtype `object` (mistura True/False/NaN) mesmo depois do
+    # fillna — nesse dtype, `~` (bitwise NOT, usado no filtro de df_base mais abaixo) não
+    # nega booleano, inverte como inteiro Python (~True==-2, ~False==-1), e o pandas lê
+    # esses números como nome de coluna em vez de máscara (KeyError). `.astype(bool)`
+    # força dtype bool de verdade.
+    df["Possivel_Zumbi"] = df["Possivel_Zumbi"].fillna(False).astype(bool)
 
     # Linha de Negócio: 2 merges, não 1 — MANUAL casa por cliente+Org (`chave_org_vda_cli`,
     # ver achado 2026-09-06 em `linha_negocio_por_cliente`: o mesmo cliente pode ter Linha
@@ -212,13 +261,59 @@ else:
             "quantidade do backlog e nunca têm Linha de Negócio (não são cliente final). Fora das "
             "métricas abaixo por padrão."
         )
-    incluir_intercompany = st.checkbox(
-        "Incluir transferência intercompany nas métricas abaixo",
-        value=False,
-        key="pxe_incluir_intercompany",
-        help="Deixe desmarcado pra ver só backlog comercial real — transferência entre filiais não é venda a cliente final.",
-    )
-    df_base = df if incluir_intercompany else df[~df["Flag_Intercompany"]]
+    n_org_internacional = int(df["Flag_Org_Internacional"].sum())
+    qtd_org_internacional = df.loc[df["Flag_Org_Internacional"], "Qtd_Pendente_Operacional"].sum()
+    if n_org_internacional:
+        termos_org = "/".join(f'"{t}"' for t in ORG_VENDAS_INTERNACIONAL_LIKE)
+        st.caption(
+            f":material/info: {n_org_internacional:,} item(ns) ({qtd_org_internacional:,.0f} "
+            f"unidades) são de Organização de Vendas Colômbia/Uruguai (`Nome_Org_Vendas` contém "
+            f"{termos_org}) — diferente do intercompany acima (esse é por Org Vendas, não por "
+            "cliente): pode ser venda real pra cliente externo processada pela filial "
+            "comercial do país, não só transferência interna."
+        )
+
+    n_zumbi_itens = int(df["Possivel_Zumbi"].sum())
+    qtd_zumbi_itens = df.loc[df["Possivel_Zumbi"], "Qtd_Pendente_Operacional"].sum()
+    if n_zumbi_itens:
+        st.caption(
+            f":material/warning: {n_zumbi_itens:,} item(ns) ({qtd_zumbi_itens:,.0f} unidades) "
+            f"são de Material+Centro com pedido mais antigo passando de {limiar_zumbi_dias:,} "
+            "dias (limiar configurado no Admin) **e** reserva SAP menor que a quantidade sem "
+            "estoque (`Possivel_Zumbi`) — sinal de pedido nunca baixado/cancelado no SAP, não "
+            "falta de estoque real. Ver também \"Radar de pedido zumbi\" na página **Pedidos** "
+            "pra visão global."
+        )
+
+    col_check_a, col_check_b, col_check_c = st.columns(3)
+    with col_check_a:
+        incluir_intercompany = st.checkbox(
+            "Incluir transferência intercompany nas métricas abaixo",
+            value=not bool(app_db.get_setting("excluir_intercompany")),
+            key="pxe_incluir_intercompany",
+            help="Deixe desmarcado pra ver só backlog comercial real — transferência entre filiais não é venda a cliente final. Default vem da config do Admin.",
+        )
+    with col_check_b:
+        incluir_org_internacional = st.checkbox(
+            "Incluir Organização de Vendas Colômbia/Uruguai nas métricas abaixo",
+            value=not bool(app_db.get_setting("excluir_org_vendas_internacional")),
+            key="pxe_incluir_org_internacional",
+            help="Desmarcado = só Organização de Vendas Brasil. Default vem da config do Admin.",
+        )
+    with col_check_c:
+        incluir_possivel_zumbi = st.checkbox(
+            "Incluir possíveis pedidos zumbi nas métricas abaixo",
+            value=not bool(app_db.get_setting("excluir_possivel_zumbi")),
+            key="pxe_incluir_possivel_zumbi",
+            help="Desmarcado = tira Material+Centro marcado como Possivel_Zumbi de tudo (KPIs, pivots, ranking, detalhe). Default vem da config do Admin.",
+        )
+    df_base = df
+    if not incluir_intercompany:
+        df_base = df_base[~df_base["Flag_Intercompany"]]
+    if not incluir_org_internacional:
+        df_base = df_base[~df_base["Flag_Org_Internacional"]]
+    if not incluir_possivel_zumbi:
+        df_base = df_base[~df_base["Possivel_Zumbi"]]
 
     f1, f2, f3, f4, f5, f6 = st.columns([1.1, 1.1, 1.1, 0.7, 0.7, 0.7])
     with f1:
@@ -406,6 +501,34 @@ else:
             )
             st.dataframe(pivot_qtd.style.format("{:,.0f}"), width="stretch")
 
+    st.markdown("**Motivo_Principal x Linha de Negócio**")
+    st.caption(
+        "Mesmo caveat da tabela de Linha de Negócio acima: dado manual, cobertura parcial "
+        "(o resto cai em NAO ALOCADO) — Org Vendas x Linha de Negócio são dimensões "
+        "independentes, então as colunas aqui não são as mesmas do pivot acima."
+    )
+    tab_valor_pivot_ln, tab_qtd_pivot_ln = st.tabs(["Valor pendente (R$)", "Quantidade pendente (un)"])
+    with tab_valor_pivot_ln:
+        with card("pxe-motivo-linha-negocio-pivot-valor"):
+            pivot_valor_ln = df_filtrado.pivot_table(
+                index="Motivo_Principal",
+                columns="Linha_Negocio",
+                values="Valor_Pendente_Faturamento_BRL",
+                aggfunc="sum",
+                fill_value=0,
+            )
+            st.dataframe(pivot_valor_ln.style.format("R$ {:,.0f}"), width="stretch")
+    with tab_qtd_pivot_ln:
+        with card("pxe-motivo-linha-negocio-pivot-qtd"):
+            pivot_qtd_ln = df_filtrado.pivot_table(
+                index="Motivo_Principal",
+                columns="Linha_Negocio",
+                values="Qtd_Pendente_Operacional",
+                aggfunc="sum",
+                fill_value=0,
+            )
+            st.dataframe(pivot_qtd_ln.style.format("{:,.0f}"), width="stretch")
+
     st.divider()
 
     df_sem_cobertura = df_filtrado[df_filtrado["Motivo_Principal"].isin(["Sem Estoque", "Estoque Parcial"])]
@@ -437,12 +560,20 @@ else:
                 Itens_Total=("Numero_Pedido", "count"),
                 Qtd_Sem_Estoque=("Qtd_Pendente_Operacional", "sum"),
                 Valor_Sem_Estoque=("Valor_Pendente_Faturamento_BRL", "sum"),
+                # Dias_Pedido_Mais_Antigo/Qtd_Reservada/Possivel_Zumbi já vêm prontos do merge
+                # feito lá em cima (propriedade do Material+Centro, não deste filtro ad-hoc) —
+                # "first" só carrega o valor, já é constante dentro do grupo.
+                Dias_Pedido_Mais_Antigo=("Dias_Pedido_Mais_Antigo", "first"),
+                Qtd_Reservada=("Qtd_Reservada", "first"),
+                Possivel_Zumbi=("Possivel_Zumbi", "first"),
             )
             .reset_index()
         )
         df_ranking = df_ranking[df_ranking["Valor_Sem_Estoque"] > 0].sort_values("Valor_Sem_Estoque", ascending=False)
 
-        df_estoque_mc = _estoque_cached().rename(columns={"Codigo_Material": "Codigo_Produto"})[
+        df_estoque_mc = _estoque_cached(
+            bool(app_db.get_setting("excluir_estoque_internacional"))
+        ).rename(columns={"Codigo_Material": "Codigo_Produto"})[
             ["Codigo_Produto", "Codigo_Centro", "Qtd_Qualidade", "Qtd_Bloqueado", "Qtd_Disponivel_Venda"]
         ]
         df_ranking = df_ranking.merge(df_estoque_mc, on=["Codigo_Produto", "Codigo_Centro"], how="left").merge(
@@ -452,6 +583,13 @@ else:
         for col in ("Data_Ultima_Entrada", "Data_Ultima_Liberacao_Qualidade", "Data_Ultima_Saida", "Data_Ultimo_Movimento"):
             df_ranking[col] = pd.to_datetime(df_ranking[col])
         df_ranking["Dias_Desde_Ultimo_Movimento"] = (pd.Timestamp(date.today()) - df_ranking["Data_Ultimo_Movimento"]).dt.days
+
+        if int(df_ranking["Possivel_Zumbi"].sum()):
+            st.caption(
+                ":material/warning: Coluna `Possivel_Zumbi` abaixo sinaliza Material+Centro "
+                "suspeito (ver aviso lá em cima) — o toggle \"Incluir possíveis pedidos zumbi\" "
+                "no topo da página já controla se essas linhas aparecem aqui ou não."
+            )
 
         filtro_motivo_estoque = st.multiselect(
             "Causa_Estoque_Material (filtra o ranking abaixo)",
@@ -491,6 +629,7 @@ else:
         colunas_ranking = [
             "Codigo_Produto", "Descricao_Produto", "Codigo_Centro", "Nome_Centro",
             "Itens_Total", "Qtd_Sem_Estoque", "Valor_Sem_Estoque",
+            "Dias_Pedido_Mais_Antigo", "Qtd_Reservada", "Possivel_Zumbi",
             "Causa_Estoque_Material", "Data_Ultima_Entrada", "Data_Ultima_Saida", "Dias_Desde_Ultimo_Movimento",
         ]
         df_ranking_show = df_ranking[colunas_ranking].reset_index(drop=True)
@@ -522,6 +661,8 @@ else:
                         "Qtd_Sem_Estoque": "{:,.0f}",
                         "Valor_Sem_Estoque": "R$ {:,.2f}",
                         "Dias_Desde_Ultimo_Movimento": "{:,.0f}",
+                        "Dias_Pedido_Mais_Antigo": "{:,.0f}",
+                        "Qtd_Reservada": "{:,.0f}",
                     },
                     na_rep="—",
                 ),
