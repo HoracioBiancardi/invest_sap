@@ -1,0 +1,17 @@
+{% extends "_portal.html" %}
+{% block subtitulo %}Portal de Acesso · Invest SAP{% endblock %}
+{% block corpo %}
+<form method="post" action="/login" class="portal-form">
+  <input type="hidden" name="_csrf" value="{{ csrf_login }}">
+  <input type="hidden" name="next" value="{{ proximo }}">
+  <label class="campo"><span class="campo-rotulo">Usuário</span>
+    <input type="text" name="usuario" autocomplete="username" placeholder="seu usuário" value="{{ usuario or '' }}" required autofocus maxlength="64">
+  </label>
+  <label class="campo"><span class="campo-rotulo">Senha</span>
+    <input type="password" name="senha" autocomplete="current-password" placeholder="Digite sua senha…" required>
+  </label>
+  {% if erro %}<div class="alerta alerta--erro" role="alert">{{ icone("error") }}<div>{{ erro }}</div></div>{% endif %}
+  <p class="caption">Sessão com bloqueio automático por inatividade.</p>
+  <button type="submit" class="botao botao--primario botao--largo">Entrar</button>
+</form>
+{% endblock %}

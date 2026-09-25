@@ -154,7 +154,72 @@ Resultados da primeira rodada (2026-08-24) e o que eles significaram:
 `INVESTIGACAO_PENDENCIA_SAP.md` §7. Vale rodar de novo depois de qualquer deploy em
 `GOLD.vendas_sap`/`GOLD.vendas` pra conferir se alguma checagem regrediu ou zerou.
 
-## 9. Dashboard visual (Streamlit)
+## 8.5 App web (FastAPI + Jinja + HTMX) — substitui o Streamlit
+
+Migração feita em 2026-09-25 (branch `feat/fastapi-htmx`): as 23 páginas do Streamlit foram
+portadas para `web/`, com a mesma regra de negócio (a camada `scripts/query_*` é a mesma). O
+Streamlit (`app.py` + `pages/`) continua funcionando em paralelo até a validação; depois sai.
+
+```bash
+uv run python -m web                                  # http://127.0.0.1:8000
+APP_PORT=8001 uv run python -m web                    # outra porta
+uv run pytest tests/test_web.py -v                    # testes do app web (sem DW)
+```
+
+**Estrutura**
+
+| Onde | O quê |
+|---|---|
+| `web/main.py` | Rotas, sessão, CSRF, headers de segurança, gzip, ciclo de render |
+| `web/ui.py` | Kit de UI com a semântica do Streamlit (`caption`, `columns`, `metric`, `table`, `tabs`, `selectbox`…) gerando HTML + HTMX |
+| `web/views/<pagina>.py` | 1 módulo por página: `render(p, ctx)`, opcionais `BLOCOS` (lazy), `DOWNLOADS`, `AQUECER` |
+| `web/views/__init__.py` | Registro de páginas e seções do menu |
+| `web/views/_comum.py` | Filtros compartilhados (período/tipo de cliente, recorte comercial, executivo) |
+| `web/cache.py` | Cache TTL com single-flight, `em_paralelo`, pré-aquecimento |
+| `web/auth.py` | Login, lockout, sessão server-side (tabela `sessions` no `app.db`) |
+| `web/static/app.js` | Tabelas (Tabulator), gráficos (ECharts), IndexedDB, eventos de filtro |
+
+**Adicionar uma página:** criar `web/views/nova.py` com `render(p, ctx)` e registrar em
+`PAGINAS` (`web/views/__init__.py`). Filtros = widgets do `p` (`p.selectbox(...)` devolve o
+valor já lido da URL); consultas ao DW sempre via função decorada com `@cached(ttl=...)`.
+
+**Desempenho (o que mudou em relação ao Streamlit)**
+
+- Mudar filtro troca só o `<main>` (HTMX), sem reexecutar a página no navegador; a URL guarda
+  os filtros (link compartilhável).
+- Abas de servidor: só a aba aberta consulta o DW.
+- Blocos lazy (`p.lazy`): a página abre na hora e as seções pesadas chegam em paralelo;
+  detalhe de item (MCHBH), Oportunidade/Remessas e seções da Home/Pedidos são blocos.
+- `em_paralelo`: pacotes de consultas independentes rodam juntos (Home: 50s → 13s frio).
+- Cache compartilhado entre usuários com single-flight (N pessoas pedindo a mesma consulta
+  fria = 1 ida ao DW) e pré-aquecimento das consultas pesadas ao subir/desbloquear o cofre.
+- Listas grandes de filtro (6 mil clientes, 1,7 mil produtos) ficam no IndexedDB do
+  navegador e só são rebaixadas quando mudam.
+- Tabelas e gráficos só são montados quando ficam visíveis na tela.
+
+**Deploy para mais usuários (servidor interno, VPN)**
+
+- **Um processo só** (`workers=1`, já fixo em `python -m web`): cofre desbloqueado, lockout e
+  cache vivem na memória do processo. As requisições rodam no threadpool.
+- O app escuta em `127.0.0.1`; exponha só por um proxy reverso com HTTPS. Exemplo Caddy:
+
+  ```
+  invest.intranet.exemplo {
+      reverse_proxy 127.0.0.1:8000
+  }
+  ```
+- `APP_COOKIE_SECURE` fica `1` (padrão) atrás do HTTPS; `0` só para teste local em HTTP fora
+  de `localhost`. `APP_FORWARDED_IPS` = IP do proxy (log com IP real).
+- Rodar como serviço (systemd) com `Restart=on-failure`; após cada reinício um admin
+  desbloqueia o cofre (tela aparece sozinha para admin).
+
+**Segurança:** sessão server-side (cookie só com token aleatório, banco guarda o hash),
+`HttpOnly`/`SameSite=Strict`/`Secure`, CSRF em todo POST, CSP `script-src 'self'` (bibliotecas
+JS servidas localmente em `web/static/vendor`), `Cache-Control: no-store`, HSTS, logout apaga
+IndexedDB (`Clear-Site-Data`), desativar/redefinir senha derruba as sessões do usuário na hora,
+CSV exportado com proteção contra injeção de fórmula.
+
+## 9. Dashboard visual (Streamlit — em substituição, ver §8.5)
 
 Uso pessoal, local — não é hospedado nem multiusuário (ver decisão de escopo na
 conversa que motivou isso: só uma pessoa acessa, então dashboard local resolve sem

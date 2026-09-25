@@ -1,0 +1,20 @@
+{% extends "_portal.html" %}
+{% block titulo %}Nova senha{% endblock %}
+{% block subtitulo %}Defina uma nova senha{% endblock %}
+{% block corpo %}
+<p class="caption">Olá, {{ usuario.username }}. Sua senha atual é temporária — troque para continuar (mínimo {{ min }} caracteres, força Média).</p>
+<form method="post" action="/senha/nova" class="portal-form">
+  <input type="hidden" name="_csrf" value="{{ csrf }}">
+  <label class="campo"><span class="campo-rotulo">Nova senha</span>
+    <input type="password" name="nova" autocomplete="new-password" required>
+  </label>
+  <div class="forca-alvo" data-forca-de="nova"></div>
+  <label class="campo"><span class="campo-rotulo">Confirmar nova senha</span>
+    <input type="password" name="conf" autocomplete="new-password" required>
+  </label>
+  {% if erro %}<div class="alerta alerta--erro" role="alert">{{ icone("error") }}<div>{{ erro }}</div></div>{% endif %}
+  <button type="submit" class="botao botao--primario botao--largo">Salvar</button>
+  <button type="button" class="botao botao--largo" hx-get="/senha/sugerir" hx-target="next .sugestao" hx-swap="innerHTML">{{ icone("key") }}Sugerir senha forte</button>
+  <div class="sugestao"></div>
+</form>
+{% endblock %}

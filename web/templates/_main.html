@@ -1,0 +1,7 @@
+<main id="main" class="conteudo" tabindex="-1">
+  <form id="pf" hx-get="{{ caminho }}" hx-target="#main" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#progresso" hx-sync="this:replace"></form>
+  {# Botão padrão do Enter: sem ele, Enter num campo de texto "clicaria" o 1º submit do form (uma aba). #}
+  <button type="submit" form="pf" class="oculto" tabindex="-1" aria-hidden="true"></button>
+  {{ conteudo }}
+  {% for tipo, texto in toasts %}<template class="toast-dados" data-tipo="{{ tipo }}">{{ texto }}</template>{% endfor %}
+</main>

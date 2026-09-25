@@ -13,10 +13,13 @@ crypto_vault_service do template); as funções de senha daqui só delegam pra e
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import re
+import secrets
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
@@ -67,6 +70,13 @@ CREATE TABLE IF NOT EXISTS audit_log (
     usuario TEXT,
     acao TEXT NOT NULL,
     detalhe TEXT
+);
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    csrf TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    last_seen REAL NOT NULL
 );
 """
 
@@ -344,3 +354,63 @@ def listar_audit(limite: int = 200) -> list[dict[str, Any]]:
             (int(limite),),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── sessões (app web) ────────────────────────────────────────────────────────
+# O cookie leva só o token aleatório; aqui fica o SHA-256 dele (vazamento do app.db não
+# entrega sessão válida). Expiração por inatividade é conferida por quem lê (web/auth.py).
+
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def criar_sessao(user_id: int) -> tuple[str, str]:
+    """Cria uma sessão para o usuário.
+
+    Returns:
+        (token para o cookie, token CSRF da sessão).
+    """
+    token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+    agora_ts = time.time()
+    with connect() as c:
+        c.execute(
+            "INSERT INTO sessions (token_hash, user_id, csrf, created_at, last_seen) VALUES (?, ?, ?, ?, ?)",
+            (_hash_token(token), int(user_id), csrf, agora_ts, agora_ts),
+        )
+    return token, csrf
+
+
+def ler_sessao(token: str) -> Optional[dict[str, Any]]:
+    """Sessão do token (com `token_hash`, `user_id`, `csrf`, `last_seen`), ou None."""
+    if not token:
+        return None
+    with connect() as c:
+        row = c.execute("SELECT * FROM sessions WHERE token_hash = ?", (_hash_token(token),)).fetchone()
+    return dict(row) if row else None
+
+
+def tocar_sessao(token_hash: str) -> None:
+    """Atualiza o último acesso (renova o prazo de inatividade)."""
+    with connect() as c:
+        c.execute("UPDATE sessions SET last_seen = ? WHERE token_hash = ?", (time.time(), token_hash))
+
+
+def apagar_sessao(token_hash: str) -> None:
+    with connect() as c:
+        c.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+
+
+def apagar_sessoes_usuario(user_id: int, exceto: Optional[str] = None) -> None:
+    """Derruba as sessões do usuário (senha redefinida, desativado), menos `exceto`."""
+    with connect() as c:
+        c.execute(
+            "DELETE FROM sessions WHERE user_id = ? AND token_hash != ?", (int(user_id), exceto or "")
+        )
+
+
+def limpar_sessoes_inativas(idle_segundos: int) -> int:
+    """Apaga sessões sem acesso há mais de `idle_segundos`; devolve quantas."""
+    with connect() as c:
+        cur = c.execute("DELETE FROM sessions WHERE last_seen < ?", (time.time() - idle_segundos,))
+        return cur.rowcount

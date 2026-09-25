@@ -126,6 +126,9 @@ class CredentialVault:
 
     MAX_FALHAS: int = 5
     BLOQUEIO_SEG: int = 60
+    # False no servidor web (web/main.py): lá o desbloqueio é pela tela, e um getpass()
+    # travaria a thread da requisição esperando o terminal.
+    interativo: bool = True
     _credenciais: dict[str, str] | None = None
     _falhas: list[float] = []
     _lock = threading.Lock()
@@ -352,7 +355,7 @@ class CredentialVault:
         Não faz nada se já desbloqueado, se não há terminal ou se roda dentro do Streamlit
         (lá o desbloqueio é pela tela, por um admin).
         """
-        if cls.desbloqueado() or not sys.stdin.isatty() or _dentro_do_streamlit():
+        if cls.desbloqueado() or not cls.interativo or not sys.stdin.isatty() or _dentro_do_streamlit():
             return
         for _ in range(3):
             try:

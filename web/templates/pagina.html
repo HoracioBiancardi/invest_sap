@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="{{ tema }}">
+<head>
+{% include "_head.html" %}
+<script src="/static/vendor/echarts.min.js?v={{ v }}" defer></script>
+<script src="/static/vendor/tabulator.min.js?v={{ v }}" defer></script>
+<script src="/static/app.js?v={{ v }}" defer></script>
+<title>{{ titulo }} · Invest SAP</title>
+</head>
+<body hx-boost="true" hx-headers='{"X-CSRF-Token": "{{ csrf }}"}'>
+<a class="pular" href="#main">Pular para o conteúdo</a>
+<div id="progresso" class="progresso" aria-hidden="true"></div>
+<div class="shell">
+  <nav class="rail" aria-label="Seções">
+    <a class="rail-marca" href="/p/home" title="Início"><img src="/static/blau_icon.png?v={{ v }}" alt="Blau"></a>
+    {% for secao, paginas in menu.items() %}
+      {% set ic, titulo_secao, curto = SECOES[secao] %}
+      <a class="rail-item{% if secao == secao_atual %} rail-item--on{% endif %}" href="{{ paginas[0].url }}" title="{{ titulo_secao }}"{% if secao == secao_atual %} aria-current="true"{% endif %}>
+        {{ icone(ic) }}<span>{{ curto }}</span>
+      </a>
+    {% endfor %}
+  </nav>
+  <aside class="lateral" aria-label="Páginas da seção">
+    <img class="lateral-logo" src="/static/blau_logo.png?v={{ v }}" alt="Blau Farmacêutica">
+    {% set secao_menu = secao_atual if secao_atual is not none else "" %}
+    <p class="lateral-secao">{{ SECOES[secao_menu][1] }}</p>
+    {% for pag in menu.get(secao_menu, []) %}
+      <a class="lateral-item{% if pagina_atual and pag.slug == pagina_atual.slug %} lateral-item--on{% endif %}" href="{{ pag.url }}"{% if pagina_atual and pag.slug == pagina_atual.slug %} aria-current="page"{% endif %}>
+        {{ icone(pag.icone) }}<span>{{ pag.titulo }}</span>
+      </a>
+    {% endfor %}
+  </aside>
+  <div class="area">
+    <header class="topo">
+      <button type="button" class="topo-menu" data-alterna-lateral aria-label="Abrir menu">{{ icone("menu") }}</button>
+      <div class="topo-marca">SwordPower <span>· Invest SAP</span></div>
+      <div class="topo-acoes">
+        {% if cofre_liberado %}<span class="conexao">online</span>{% else %}<span class="conexao conexao--off">cofre bloqueado</span>{% endif %}
+        <span class="ola">Olá, {{ usuario.username }}</span>
+        {% if usuario.role == "admin" %}<a class="botao botao--fantasma" href="/p/admin" title="Área administrativa">{{ icone("admin_panel_settings") }}<span>Admin</span></a>{% endif %}
+        <label class="tema-sel" title="Tema da interface">{{ icone("palette") }}
+          <select data-tema aria-label="Tema da interface">
+            {% for chave, rotulo in TEMAS.items() %}<option value="{{ chave }}"{% if chave == tema %} selected{% endif %}>{{ rotulo }}</option>{% endfor %}
+          </select>
+        </label>
+        <a class="botao botao--fantasma" href="/conta/senha" title="Trocar minha senha">{{ icone("key") }}<span>Minha senha</span></a>
+        <form method="post" action="/logout" class="sair">
+          <input type="hidden" name="_csrf" value="{{ csrf }}">
+          <button type="submit" class="botao botao--fantasma" title="{{ usuario.username }} ({{ usuario.role }}) — sair">{{ icone("logout") }}<span>Sair</span></button>
+        </form>
+      </div>
+    </header>
+    {% include "_main.html" %}
+  </div>
+</div>
+<div id="toasts" class="toasts" aria-live="polite"></div>
+</body>
+</html>

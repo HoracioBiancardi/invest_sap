@@ -1,0 +1,6 @@
+{% set cores = {"Muito Fraca": "erro", "Fraca": "erro", "Média": "aviso", "Forte": "ok", "Excelente": "ok"} %}
+<div class="forca forca--{{ cores.get(forca.nivel, 'aviso') }}">
+  <div class="forca-trilho"><div class="forca-barra" style="width: {{ forca.score }}%"></div></div>
+  <div class="forca-info"><span class="pill pill--{{ cores.get(forca.nivel, 'aviso') }}">{{ forca.nivel }}</span>
+    <span>{{ forca.feedback | join(" · ") }}</span></div>
+</div>

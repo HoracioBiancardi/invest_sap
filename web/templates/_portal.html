@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="{{ tema }}">
+<head>
+{% include "_head.html" %}
+<script src="/static/app.js?v={{ v }}" defer></script>
+<title>{% block titulo %}Portal de Acesso{% endblock %} · Invest SAP</title>
+</head>
+<body class="portal"{% if csrf %} hx-headers='{"X-CSRF-Token": "{{ csrf }}"}'{% endif %}>
+<div class="aurora" aria-hidden="true"><span></span><span></span><span></span></div>
+<main class="portal-caixa">
+  <div class="portal-marca">
+    <div class="portal-icone">{{ icone("lock") }}</div>
+    <div><div class="portal-titulo">SwordPower</div><div class="portal-sub">{% block subtitulo %}{% endblock %}</div></div>
+  </div>
+  {% block corpo %}{% endblock %}
+</main>
+</body>
+</html>
