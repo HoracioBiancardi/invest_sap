@@ -10,29 +10,34 @@
 <body hx-boost="true" hx-headers='{"X-CSRF-Token": "{{ csrf }}"}'>
 <a class="pular" href="#main">Pular para o conteúdo</a>
 <div id="progresso" class="progresso" aria-hidden="true"></div>
-<div class="shell">
+<div class="shell{% if lateral_recolhida %} shell--recolhida{% endif %}">
+  {% set secao_menu = secao_atual if secao_atual is not none else "" %}
   <nav class="rail" aria-label="Seções">
     <a class="rail-marca" href="/p/home" title="Início"><img src="/static/blau_icon.png?v={{ v }}" alt="Blau"></a>
     {% for secao, paginas in menu.items() %}
       {% set ic, titulo_secao, curto = SECOES[secao] %}
-      <a class="rail-item{% if secao == secao_atual %} rail-item--on{% endif %}" href="{{ paginas[0].url }}" title="{{ titulo_secao }}"{% if secao == secao_atual %} aria-current="true"{% endif %}>
+      {# Seção com várias páginas: o clique só troca a lista do menu lateral (app.js), sem ir ao servidor. #}
+      <a class="rail-item{% if secao == secao_menu %} rail-item--on{% endif %}" href="{{ paginas[0].url }}" title="{{ titulo_secao }}" data-secao="{{ loop.index0 }}"{% if paginas|length > 1 %} data-abre-secao{% endif %}{% if secao == secao_menu %} aria-current="true"{% endif %}>
         {{ icone(ic) }}<span>{{ curto }}</span>
       </a>
     {% endfor %}
   </nav>
   <aside class="lateral" aria-label="Páginas da seção">
     <img class="lateral-logo" src="/static/blau_logo.png?v={{ v }}" alt="Blau Farmacêutica">
-    {% set secao_menu = secao_atual if secao_atual is not none else "" %}
-    <p class="lateral-secao">{{ SECOES[secao_menu][1] }}</p>
-    {% for pag in menu.get(secao_menu, []) %}
-      <a class="lateral-item{% if pagina_atual and pag.slug == pagina_atual.slug %} lateral-item--on{% endif %}" href="{{ pag.url }}"{% if pagina_atual and pag.slug == pagina_atual.slug %} aria-current="page"{% endif %}>
-        {{ icone(pag.icone) }}<span>{{ pag.titulo }}</span>
-      </a>
+    {% for secao, paginas in menu.items() %}
+    <div class="lateral-grupo" data-secao="{{ loop.index0 }}"{% if secao != secao_menu %} hidden{% endif %}>
+      <p class="lateral-secao">{{ SECOES[secao][1] }}</p>
+      {% for pag in paginas %}
+        <a class="lateral-item{% if pagina_atual and pag.slug == pagina_atual.slug %} lateral-item--on{% endif %}" href="{{ pag.url }}"{% if pagina_atual and pag.slug == pagina_atual.slug %} aria-current="page"{% endif %}>
+          {{ icone(pag.icone) }}<span>{{ pag.titulo }}</span>
+        </a>
+      {% endfor %}
+    </div>
     {% endfor %}
   </aside>
   <div class="area">
     <header class="topo">
-      <button type="button" class="topo-menu" data-alterna-lateral aria-label="Abrir menu">{{ icone("menu") }}</button>
+      <button type="button" class="topo-menu" data-alterna-lateral aria-label="Mostrar/esconder o menu lateral" title="Mostrar/esconder o menu lateral">{{ icone("menu") }}</button>
       <div class="topo-marca">SwordPower <span>· Invest SAP</span></div>
       <div class="topo-acoes">
         {% if cofre_liberado %}<span class="conexao">online</span>{% else %}<span class="conexao conexao--off">cofre bloqueado</span>{% endif %}

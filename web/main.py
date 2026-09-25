@@ -193,6 +193,7 @@ def _contexto_shell(request: Request, usuario: dict, sessao: dict, pagina: Optio
         "pagina_atual": pagina,
         "secao_atual": pagina.secao if pagina else None,
         "cofre_liberado": not estado["configurado"] or estado["desbloqueado"],
+        "lateral_recolhida": request.cookies.get("invest_lateral") == "0",
     }
 
 

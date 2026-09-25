@@ -338,11 +338,44 @@
       const nova = caixa && caixa.querySelector('input[name="nova"]');
       if (nova) medirForca(nova);
     }
-    if (e.target.closest("[data-alterna-lateral]")) {
-      const lateral = document.querySelector(".lateral");
-      if (lateral) lateral.classList.toggle("aberta");
+    if (e.target.closest("[data-alterna-lateral]")) alternarLateral();
+    const secao = e.target.closest("[data-abre-secao]");
+    if (secao && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) {
+      e.preventDefault();
+      abrirSecao(secao);
     }
   });
+
+  // ── menu lateral ─────────────────────────────────────────────────────────
+  const ehTelaEstreita = () => window.matchMedia("(max-width: 1100px)").matches;
+  function lateralVisivel() {
+    const lateral = document.querySelector(".lateral");
+    return ehTelaEstreita() ? lateral.classList.contains("aberta") : !document.querySelector(".shell").classList.contains("shell--recolhida");
+  }
+  function mostrarLateral(visivel) {
+    if (ehTelaEstreita()) {
+      document.querySelector(".lateral").classList.toggle("aberta", visivel);
+      return;
+    }
+    document.querySelector(".shell").classList.toggle("shell--recolhida", !visivel);
+    // Cookie (não localStorage): o servidor já desenha a página no estado certo, sem piscar.
+    document.cookie = "invest_lateral=" + (visivel ? "1" : "0") + "; path=/; max-age=31536000; samesite=lax" + (location.protocol === "https:" ? "; secure" : "");
+  }
+  function alternarLateral() { mostrarLateral(!lateralVisivel()); }
+
+  // Ícone da seção: troca a lista de páginas na hora (sem ir ao servidor); clicar de novo na
+  // seção já aberta recolhe o menu, como a activity bar do VSCode.
+  function abrirSecao(item) {
+    const id = item.dataset.secao;
+    const grupoAtual = document.querySelector(".lateral-grupo:not([hidden])");
+    if (grupoAtual && grupoAtual.dataset.secao === id && lateralVisivel()) {
+      mostrarLateral(false);
+      return;
+    }
+    document.querySelectorAll(".lateral-grupo").forEach((g) => { g.hidden = g.dataset.secao !== id; });
+    document.querySelectorAll(".rail-item").forEach((r) => r.classList.toggle("rail-item--on", r === item));
+    mostrarLateral(true);
+  }
 
   let temporizadorForca = null;
   function medirForca(input) {
