@@ -24,8 +24,12 @@ uv run pytest -v
   em loopback, XSRF ligado e erros sem traceback na tela. Credenciais do DW: copie
   `.env.example` para `.env` (ignorado pelo git).
 - **Login**: usuário/senha em SQLite local (`data/app.db`, ignorado pelo git; `scripts/auth.py` +
-  `scripts/app_db.py`). 1ª execução cria `admin` — senha em `.access_key` (0600) ou
-  `APP_ACCESS_KEY`; troca obrigatória no 1º login. Página **Admin** (`pages/90_Admin.py`, só
+  `scripts/app_db.py`; hash/geração/força de senha em `scripts/password_service.py`, porte do
+  app_template — mín. 10 caracteres e força Média). Reset do admin via CLI: `docs/COMO_RODAR.md` §9.3.
+- **Credenciais do DW**: cofre cifrado com senha mestra no `app.db` (`scripts/credential_vault.py`,
+  Admin → Cofre; §2.1) — se configurado, o `.env` é ignorado para HANA/SQL Server e o app sobe
+  bloqueado até um admin digitar a senha mestra. 1ª execução cria `admin` — senha em `.access_key` (0600) ou
+  `APP_ACCESS_KEY`; troca obrigatória no 1º login. Página **Admin** (painel `pages/90_Admin.py` + páginas 91–95, só
   perfil admin): usuários, configurações e solicitações de ajuste (o DW segue só leitura).
 
 ---

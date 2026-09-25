@@ -36,204 +36,193 @@ _ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
 _CSS = """
 <style>
-:root {
-    --accent: #26B4E9;
-    --accent-soft: rgba(38, 180, 233, 0.12);
-    --accent-2: #EDB50B;
-    --surface: #262B33;
-    --surface-border: #3A4149;
-}
+/* Tokens (--primary, --surface, --border...) vêm de `_theme_css()` — este bloco só usa
+   variáveis, então acompanha o tema escolhido. Padrão visual: app_template / input_arquivos. */
 
-/* Título principal da página — friso lateral tipo painel de telemetria */
-h1 {
+/* ── Tipografia de página ─────────────────────────────────────────────────
+   Título de página compacto (text-xl bold) + legenda discreta, como no input_arquivos. */
+.stApp h1 {
+    font-size: 1.55rem !important;
     font-weight: 700 !important;
-    letter-spacing: -0.02em;
-    border-left: 4px solid var(--accent);
-    padding-left: 0.7rem !important;
+    letter-spacing: -0.01em;
+    padding: 0 0 .15rem !important;
+}
+.stApp h1 [data-testid="stIconMaterial"] { color: var(--primary); font-size: 1.45rem !important; }
+.stApp h2 { font-size: 1.2rem !important; font-weight: 700 !important; padding-top: .9rem !important; }
+.stApp h3 { font-size: 1.02rem !important; font-weight: 600 !important; }
+.stApp h2 code, .stApp h3 code { font-size: .8em; }
+/* Rótulos de campo no estilo .form-label (maiúsculo, pequeno, espaçado). Só os <label> —
+   o rótulo de checkbox/toggle é um <div> e continua em caixa normal, como no template. */
+label[data-testid="stWidgetLabel"] p {
+    font-size: .72rem !important; font-weight: 700; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--text-muted) !important;
 }
 
-/* Cards de métrica (st.metric) */
+/* ── Métricas (st.metric) — card .surface-card com hover-lift ──────────── */
 div[data-testid="stMetric"] {
-    background: var(--surface);
-    border: 1px solid var(--surface-border);
-    border-radius: 12px;
-    padding: 0.9rem 1.1rem 0.8rem;
-    border-top: 3px solid var(--accent);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    background: var(--surface-alt);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: .85rem 1rem .8rem;
+    box-shadow: var(--shadow-sm);
+    transition: transform .15s ease, border-color .15s ease;
 }
-div[data-testid="stMetric"]:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
-}
-div[data-testid="stMetricLabel"] {
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    font-size: 0.72rem !important;
-    opacity: 0.75;
+div[data-testid="stMetric"]:hover { transform: translateY(-2px); border-color: var(--border-bright); }
+div[data-testid="stMetricLabel"] p {
+    font-size: .7rem !important; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--text-muted) !important;
 }
 div[data-testid="stMetricValue"] {
-    font-size: 1.55rem !important;
+    font-size: 1.3rem !important;
     font-weight: 700 !important;
     font-variant-numeric: tabular-nums;
 }
+/* Valor/rótulo longo quebra linha em vez de virar "R$ 1,868,166,7..." */
+div[data-testid="stMetricValue"], div[data-testid="stMetricValue"] *,
+div[data-testid="stMetricLabel"], div[data-testid="stMetricLabel"] * {
+    white-space: normal !important; overflow: visible !important; text-overflow: clip !important;
+    overflow-wrap: anywhere;
+}
 
-/* st.divider() mais discreto, em degradê saindo da cor de destaque */
+/* ── Divisor ─────────────────────────────────────────────────────────── */
 hr {
     border: none !important;
     height: 1px !important;
-    background: linear-gradient(
-        90deg, var(--accent) 0%, var(--surface-border) 35%, transparent 100%
-    ) !important;
-    opacity: 0.6;
+    background: linear-gradient(90deg, var(--border-bright) 0%, var(--border) 40%, transparent 100%) !important;
     margin: 1.4rem 0 !important;
 }
 
-/* Alertas (st.info/warning/success/error) com cantos arredondados */
+/* ── Alertas — .page-alert do input_arquivos: fundo escuro + borda/texto coloridos ── */
 div[data-testid="stAlertContainer"] {
-    border-radius: 10px !important;
+    border-radius: var(--r-md) !important;
+    border: 1px solid transparent !important;
+    font-size: .875rem;
+}
+div[data-testid="stAlertContainer"]:has([data-testid="stAlertContentInfo"]) {
+    background: #0c1f3f !important; border-color: rgba(56, 139, 253, .28) !important; color: #79b8ff !important;
+}
+div[data-testid="stAlertContainer"]:has([data-testid="stAlertContentWarning"]) {
+    background: #291e0b !important; border-color: rgba(245, 158, 11, .28) !important; color: #e3b341 !important;
+}
+div[data-testid="stAlertContainer"]:has([data-testid="stAlertContentSuccess"]) {
+    background: #0d2a1a !important; border-color: rgba(34, 197, 94, .28) !important; color: #4ade80 !important;
+}
+div[data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"]) {
+    background: #2d0b0b !important; border-color: rgba(239, 68, 68, .28) !important; color: #f87171 !important;
+}
+div[data-testid="stAlertContainer"] p, div[data-testid="stAlertContainer"] strong { color: inherit !important; }
+
+/* ── Indicador "Running/Stop" do Streamlit: sai da topbar (lá ficam as ações do usuário)
+   e vira um selo flutuante no canto inferior direito, como o toast do template. ── */
+[data-testid="stStatusWidget"] {
+    position: fixed !important; bottom: 1rem; right: 1rem; top: auto !important; z-index: 999999;
+    background: var(--surface-alt); border: 1px solid var(--border); border-radius: var(--r-md);
+    padding: .2rem .6rem; box-shadow: var(--shadow-md);
 }
 
-/* Botões */
-div[data-testid="stButton"] > button {
-    border-radius: 8px !important;
-    font-weight: 600 !important;
-    transition: filter 0.15s ease;
-}
-div[data-testid="stButton"] > button:hover {
-    filter: brightness(1.15);
-}
-
-/* Spinner de carregamento (st.spinner()/show_spinner="...") com a cor de destaque do app
-   em vez do ícone cinza padrão do Streamlit. Não troca a estrutura/texto — só esconde o
-   ícone original (`stSpinnerIcon`, mantendo a caixa/alinhamento) e desenha um anel
-   giratório próprio no lugar dele via `::before`. */
-div[data-testid="stSpinnerIcon"] {
-    visibility: hidden;
-    position: relative;
-}
+/* ── Spinner com a cor do tema (anel próprio no lugar do ícone cinza padrão) ── */
+div[data-testid="stSpinnerIcon"] { visibility: hidden; position: relative; }
 div[data-testid="stSpinnerIcon"]::before {
-    content: "";
-    visibility: visible;
-    position: absolute;
-    inset: 0;
-    margin: auto;
-    width: 1rem;
-    height: 1rem;
-    border-radius: 50%;
-    border: 2px solid var(--surface-border);
-    border-top-color: var(--accent);
-    animation: bmt-spin 0.7s linear infinite;
+    content: ""; visibility: visible; position: absolute; inset: 0; margin: auto;
+    width: 1rem; height: 1rem; border-radius: 50%;
+    border: 2px solid var(--border); border-top-color: var(--primary);
+    animation: bmt-spin .7s linear infinite;
 }
-@keyframes bmt-spin {
-    to { transform: rotate(360deg); }
-}
-@media (prefers-reduced-motion: reduce) {
-    div[data-testid="stSpinnerIcon"]::before {
-        animation: none;
-    }
-}
+@keyframes bmt-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { div[data-testid="stSpinnerIcon"]::before { animation: none; } }
 
-/* Tabelas/dataframes: só o arredondado — a borda quem dá é o card (`.st-key-bmt-card-*`)
-   que normalmente envolve a tabela; ver função `card()` abaixo. `overflow: hidden` vai no
-   filho `stDataFrameResizable` (o grid em si), não no `stDataFrame` — esse é o pai direto
-   do toolbar de hover (`stElementToolbar`, confirmado no bundle JS do Streamlit instalado:
-   `DataFrame.*.js` renderiza toolbar e grid como irmãos dentro do mesmo `stDataFrame`), e
-   `overflow: hidden` ali cortava o toolbar inteiro (ele "sumia" no hover em vez de só ficar
-   atrás de algo, diferente do problema de z-index abaixo, que é outro). */
-div[data-testid="stDataFrame"] {
-    border-radius: 8px;
-}
-div[data-testid="stDataFrameResizable"] {
-    border-radius: 8px;
-    overflow: hidden;
-}
-div[data-testid="stDataFrame"] table {
-    font-variant-numeric: tabular-nums;
-}
+/* ── Tabelas/dataframes ─────────────────────────────────────────────────
+   `overflow: hidden` vai no grid (`stDataFrameResizable`), não no `stDataFrame`: esse é pai
+   do toolbar de hover (`stElementToolbar`) e cortaria o toolbar inteiro. */
+div[data-testid="stDataFrame"] { border-radius: var(--r-md); }
+div[data-testid="stDataFrameResizable"] { border-radius: var(--r-md); overflow: hidden; }
+div[data-testid="stDataFrame"] table { font-variant-numeric: tabular-nums; }
 
-/* Painel/card pra gráfico ou tabela (função `card()` abaixo) — cantos arredondados,
-   friso de destaque no topo (2 cores, como uma faixa de carenagem de corrida) e um
-   acento diagonal no canto (bandeirinha), no espírito telemetria/motorsport do
-   blaumotorsport.com.br mas sutil o bastante pra não brigar com o dado. */
+/* ── Card de gráfico/tabela (`card()`) — .surface-card do input_arquivos ── */
 div[class*="st-key-bmt-card-"] {
-    position: relative;
-    overflow: hidden;
-    border-radius: 10px !important;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    background: var(--surface);
+    border: 1px solid var(--border) !important;
+    border-radius: var(--r-lg) !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
+    transition: border-color .15s ease;
 }
-div[class*="st-key-bmt-card-"]:hover {
-    border-color: var(--accent) !important;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-}
-div[class*="st-key-bmt-card-"]::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 3px;
-    background: linear-gradient(
-        90deg,
-        var(--accent) 0%, var(--accent) 55%,
-        var(--accent-2) 55%, var(--accent-2) 68%,
-        transparent 68%
-    );
-    z-index: 2;
-}
-div[class*="st-key-bmt-card-"]::after {
-    content: "";
-    position: absolute;
-    top: -22px;
-    right: -22px;
-    width: 44px;
-    height: 44px;
-    background: var(--accent);
-    opacity: 0.14;
-    transform: rotate(45deg);
-    z-index: 1;
-    pointer-events: none;
-    transition: opacity 0.15s ease;
-}
-/* O menu/toolbar de gráfico ou tabela (nativo do Streamlit ou do vega-embed, ver os 2
-   blocos abaixo) só aparece no hover, bem no canto onde mora o acento diagonal acima —
-   mesmo com z-index acima dele, os ícones ficam visualmente sujos por cima da bandeirinha
-   colorida. Mais simples que reposicionar/encolher o acento: sumir com ele durante o hover
-   (mesmo momento em que o toolbar aparece), então nunca competem visualmente. */
-div[class*="st-key-bmt-card-"]:hover::after {
-    opacity: 0;
-}
-/* stElementToolbar (ícones de fullscreen/download/"show data" que aparecem no hover de
-   gráfico/tabela) não tem z-index próprio — sem isso, fica por baixo do friso/acento
-   diagonal acima (z-index 1-2) e alguns ícones somem ou ficam inclicáveis. */
-div[class*="st-key-bmt-card-"] [data-testid="stElementToolbar"] {
-    z-index: 3 !important;
-}
-/* Mesmo problema, só que no menu "..." nativo do Altair/Vega (`st.altair_chart`) — esse
-   não é o `stElementToolbar` acima, é o próprio botão do vega-embed (`summary`/
-   `.vega-actions`, `z-index: 1000` no CSS dele), que fica preso num stacking context por
-   baixo do acento diagonal (`::after`) quando o gráfico é o primeiro elemento do card (sem
-   `st.subheader`/`card_label()` empurrando ele pra baixo primeiro). */
+div[class*="st-key-bmt-card-"]:hover { border-color: var(--border-bright) !important; }
+div[class*="st-key-bmt-card-"] [data-testid="stElementToolbar"],
 div[class*="st-key-bmt-card-"] .vega-embed summary,
-div[class*="st-key-bmt-card-"] .vega-embed .vega-actions {
-    z-index: 3 !important;
-}
-/* Mesmo cenário "sem heading empurrando pra baixo" acima, mas o sintoma aqui é outro: o
-   toolbar (`stElementToolbar`) flutua ACIMA do próprio elemento (offset negativo, padrão do
-   Streamlit) pra não ocupar espaço no layout — quando o elemento é o primeiro filho do seu
-   bloco (direto no card, ou dentro de 1 coluna de `st.columns()` dentro do card, como
-   tabela+gráfico lado a lado), esse offset negativo estoura o teto do card e o
-   `overflow: hidden` dele (necessário pro acento diagonal acima ficar só com a ponta visível,
-   não um losango inteiro flutuando) corta o toolbar de vez — ele some, em vez de só ficar
-   sujo atrás de algo (esse já era resolvido pelo z-index acima). Fix: reservar espaço no
-   topo só quando o 1º elemento do bloco tiver toolbar (`:has()`), sem mexer no espaçamento
-   de cards que já têm heading/`card_label()` antes (nesses o elemento não é `:first-child`
-   do bloco, a regra não bate). `:first-child` aqui é relativo ao bloco imediato (o
-   `stVerticalBlock` do card OU de cada coluna dentro dele), não ao card inteiro — por isso
-   funciona igual pro caso "tabela+gráfico em 2 colunas" e pro caso "1 elemento só". */
+div[class*="st-key-bmt-card-"] .vega-embed .vega-actions { z-index: 3 !important; }
+/* Toolbar de hover flutua acima do elemento; se ele é o 1º do card, reserva espaço. */
 div[class*="st-key-bmt-card-"] div[data-testid="stElementContainer"]:first-child:has([data-testid="stElementToolbar"]) {
-    margin-top: 2rem;
+    margin-top: 1.6rem;
+}
+/* Container com borda (st.container(border=True)) no mesmo padrão de card */
+div[data-testid="stVerticalBlockBorderWrapper"]:not([class*="st-key-bmt-"]) {
+    border-color: var(--border) !important; border-radius: var(--r-lg) !important;
+}
+
+/* ── Cabeçalho de seção (`section_header()`) — .icon-badge + título + subtítulo ── */
+.bmt-sec { display: flex; align-items: center; gap: .75rem; margin: .4rem 0 .9rem; }
+.bmt-sec-icon {
+    width: 2.25rem; height: 2.25rem; border-radius: var(--r-md); flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; font-size: 1.05rem;
+    background: var(--primary-dim); color: var(--primary); border: 1px solid var(--border-bright);
+}
+.bmt-sec-title { font-size: 1rem; font-weight: 700; color: var(--text); line-height: 1.2; }
+.bmt-sec-sub { font-size: .75rem; color: var(--text-muted); margin-top: .15rem; }
+
+/* ── Medidor de força de senha (`scripts/auth.py::_render_forca`) ── */
+.bmt-forca { margin: -.25rem 0 .75rem; }
+.bmt-forca-track {
+    width: 100%; height: 8px; background: var(--surface-alt);
+    border: 1px solid var(--border-muted); border-radius: 4px; overflow: hidden;
+}
+.bmt-forca-fill { height: 100%; border-radius: 4px; transition: width .3s ease; }
+.bmt-forca-info { display: flex; align-items: center; gap: .5rem; margin-top: .4rem; font-size: .72rem; color: var(--text-subtle); }
+.bmt-badge {
+    display: inline-flex; padding: .1rem .45rem; border-radius: var(--r-sm); font-size: .68rem;
+    font-weight: 600; text-transform: uppercase; letter-spacing: .02em; border: 1px solid currentColor;
+}
+
+/* ── Selos (`badge()`) — .status-badge do input_arquivos ── */
+.bmt-pill {
+    display: inline-flex; align-items: center; gap: .3rem; border-radius: 9999px;
+    padding: .125rem .625rem; font-size: .75rem; font-weight: 500; line-height: 1.4; white-space: nowrap;
+}
+.bmt-pill--success { background: rgba(34, 197, 94, .15); color: var(--success); }
+.bmt-pill--error { background: rgba(239, 68, 68, .15); color: var(--danger); }
+.bmt-pill--warn { background: rgba(245, 158, 11, .15); color: var(--warn); }
+.bmt-pill--primary { background: var(--primary-dim); color: var(--primary); }
+.bmt-pill--muted { background: var(--surface-alt); color: var(--text-muted); }
+
+/* ── Tabela HTML (`html_table()`) — tabela do input_arquivos ── */
+.bmt-table-wrap { border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; background: var(--surface); }
+.bmt-table { width: 100%; border-collapse: collapse; font-size: .8125rem; }
+.bmt-table th {
+    background: var(--surface-alt); color: var(--text-muted); font-weight: 600; text-align: left;
+    padding: .65rem 1rem; border-bottom: 1px solid var(--border);
+}
+.bmt-table td { padding: .6rem 1rem; border-bottom: 1px solid var(--border-muted); color: var(--text); }
+.bmt-table tr:last-child td { border-bottom: 0; }
+.bmt-table tr:hover td { background: var(--surface-hover); }
+
+/* ── Cards de navegação (`nav_card()`) — painel de administração do input_arquivos ── */
+div[class*="st-key-bmt-navcard-"] {
+    background: var(--surface); border: 1px solid var(--border) !important;
+    border-radius: var(--r-lg) !important; box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
+    padding: 1.25rem 1.35rem .9rem !important; transition: transform .15s ease, border-color .15s ease;
+    min-height: 12.5rem; justify-content: space-between;
+}
+div[class*="st-key-bmt-navcard-"] [data-testid="stPageLink"] { margin-top: .6rem; }
+div[class*="st-key-bmt-navcard-"]:hover { transform: translateY(-2px); border-color: var(--border-bright) !important; }
+.bmt-navcard-icon {
+    width: 40px; height: 40px; border-radius: var(--r-md); background: var(--primary);
+    display: flex; align-items: center; justify-content: center; font-size: 1.1rem;
+    box-shadow: 0 0 0 1px var(--primary-dim), 0 2px 10px var(--primary-glow); margin-bottom: .75rem;
+}
+.bmt-navcard-title { font-size: 1rem; font-weight: 700; color: var(--text); margin-bottom: .3rem; }
+.bmt-navcard-desc { font-size: .78rem; color: var(--text-muted); line-height: 1.55; }
+div[class*="st-key-bmt-navcard-"] [data-testid="stPageLink"] a { padding-left: 0; }
+div[class*="st-key-bmt-navcard-"] [data-testid="stPageLink"] a p {
+    color: var(--primary) !important; font-size: .78rem !important; font-weight: 600;
 }
 
 /* Rótulo de card opcional (helper `card_label()`) — texto tipo painel de instrumento */
@@ -280,27 +269,43 @@ div[data-testid="stNavSectionHeader"] {
 THEMES: dict[str, dict[str, str]] = {
     "corporate": {
         "label": "Corporativo",
-        "bg": "#12141a", "surface": "#1a1d24", "surface_alt": "#21252e",
-        "border": "#2d323d", "primary": "#5b8def", "primary_soft": "rgba(91, 141, 239, 0.12)",
-        "text": "#e4e6eb", "font": "Inter",
+        "bg": "#12141a", "surface": "#1a1d24", "surface_alt": "#21252e", "surface_hover": "#2a2f3a",
+        "border": "#2d323d", "border_muted": "#21252e", "border_bright": "#3d4452",
+        "primary": "#5b8def", "primary_hover": "#6f9bff", "primary_soft": "rgba(91, 141, 239, 0.12)",
+        "primary_glow": "rgba(91, 141, 239, 0.18)",
+        "text": "#e4e6eb", "text_muted": "#9aa0ac", "text_subtle": "#6b7280",
+        "success": "#22c55e", "warn": "#f59e0b", "danger": "#ef4444", "danger_dim": "rgba(239, 68, 68, 0.1)",
+        "font": "Inter", "radius": "8px",
     },
     "green-neutral": {
         "label": "Verde Neutro",
-        "bg": "#0d0d0d", "surface": "#161616", "surface_alt": "#202020",
-        "border": "#303030", "primary": "#1aff80", "primary_soft": "rgba(26, 255, 128, 0.12)",
-        "text": "#1aff80", "font": "Share Tech Mono",
+        "bg": "#0d0d0d", "surface": "#161616", "surface_alt": "#202020", "surface_hover": "#2b2b2b",
+        "border": "#303030", "border_muted": "#202020", "border_bright": "#454545",
+        "primary": "#1aff80", "primary_hover": "#26ff8c", "primary_soft": "rgba(26, 255, 128, 0.12)",
+        "primary_glow": "rgba(26, 255, 128, 0.24)",
+        "text": "#1aff80", "text_muted": "#11b857", "text_subtle": "#075927",
+        "success": "#1aff80", "warn": "#ff9900", "danger": "#ff3333", "danger_dim": "rgba(255, 51, 51, 0.12)",
+        "font": "Share Tech Mono", "radius": "3px",
     },
     "cyber-dark": {
         "label": "Cyber Dark",
-        "bg": "#080914", "surface": "#0f1123", "surface_alt": "#171936",
-        "border": "#282c5e", "primary": "#8b5cf6", "primary_soft": "rgba(139, 92, 246, 0.15)",
-        "text": "#f3f4f6", "font": "Inter",
+        "bg": "#080914", "surface": "#0f1123", "surface_alt": "#171936", "surface_hover": "#21244d",
+        "border": "#282c5e", "border_muted": "#171936", "border_bright": "#404694",
+        "primary": "#8b5cf6", "primary_hover": "#a78bfa", "primary_soft": "rgba(139, 92, 246, 0.15)",
+        "primary_glow": "rgba(139, 92, 246, 0.25)",
+        "text": "#f3f4f6", "text_muted": "#9ca3af", "text_subtle": "#6b7280",
+        "success": "#06b6d4", "warn": "#f59e0b", "danger": "#ec4899", "danger_dim": "rgba(236, 72, 153, 0.12)",
+        "font": "Inter", "radius": "8px",
     },
     "blau": {
         "label": "Blau (marca)",
-        "bg": "#1C1F26", "surface": "#262B33", "surface_alt": "#2F343C",
-        "border": "#3A4149", "primary": "#26B4E9", "primary_soft": "rgba(38, 180, 233, 0.12)",
-        "text": "#F1F3F5", "font": "Roboto",
+        "bg": "#1C1F26", "surface": "#262B33", "surface_alt": "#2F343C", "surface_hover": "#363C45",
+        "border": "#3A4149", "border_muted": "#2F343C", "border_bright": "#4A525C",
+        "primary": "#26B4E9", "primary_hover": "#4CC3EF", "primary_soft": "rgba(38, 180, 233, 0.12)",
+        "primary_glow": "rgba(38, 180, 233, 0.22)",
+        "text": "#F1F3F5", "text_muted": "#ADB5BD", "text_subtle": "#7A838C",
+        "success": "#5CB85C", "warn": "#EDB50B", "danger": "#D9534F", "danger_dim": "rgba(217, 83, 79, 0.12)",
+        "font": "Roboto", "radius": "8px",
     },
 }
 DEFAULT_THEME = "corporate"
@@ -317,7 +322,89 @@ def _theme_css(name: str) -> str:
     --accent-soft: {t["primary_soft"]};
     --surface: {t["surface"]};
     --surface-border: {t["border"]};
+    /* Tokens do app_template (frontend/css/style.css + theme.css), usados pelos componentes
+       abaixo e pela tela de login (scripts/auth.py). */
+    --bg: {t["bg"]}; --surface-alt: {t["surface_alt"]}; --surface-hover: {t["surface_hover"]};
+    --border: {t["border"]}; --border-muted: {t["border_muted"]}; --border-bright: {t["border_bright"]};
+    --primary: {t["primary"]}; --primary-hover: {t["primary_hover"]};
+    --primary-dim: {t["primary_soft"]}; --primary-glow: {t["primary_glow"]};
+    --glow-ring: 0 0 0 3px {t["primary_glow"]};
+    --text: {t["text"]}; --text-muted: {t["text_muted"]}; --text-subtle: {t["text_subtle"]};
+    --success: {t["success"]}; --warn: {t["warn"]}; --danger: {t["danger"]}; --danger-dim: {t["danger_dim"]};
+    --shadow-sm: 0 1px 3px rgba(0,0,0,.5); --shadow-md: 0 4px 16px rgba(0,0,0,.55);
+    --shadow-lg: 0 8px 32px rgba(0,0,0,.65);
+    --ease-spring: cubic-bezier(.16,1,.3,1);
+    --r-sm: calc({t["radius"]} - 2px); --r-md: {t["radius"]}; --r-lg: calc({t["radius"]} + 4px);
 }}
+/* ── Componentes no padrão do app_template ───────────────────────────────── */
+::selection {{ background: var(--primary-dim); color: var(--primary); }}
+* {{ scrollbar-width: thin; scrollbar-color: var(--border) transparent; }}
+*::-webkit-scrollbar {{ width: 6px; height: 6px; }}
+*::-webkit-scrollbar-thumb {{ background: var(--border); border-radius: 3px; }}
+*::-webkit-scrollbar-track {{ background: transparent; }}
+/* Botões: .btn-primary (glow no hover) e .btn-ghost (secundário) */
+.stApp button[kind^="primary"] {{
+    background: var(--primary) !important; border: 1px solid var(--primary) !important;
+    color: var(--bg) !important; font-weight: 600; border-radius: var(--r-md) !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,.2); transition: background .15s, box-shadow .15s, transform .08s;
+}}
+.stApp button[kind^="primary"] p {{ color: var(--bg) !important; }}
+.stApp button[kind^="primary"]:hover {{
+    background: var(--primary-hover) !important; box-shadow: 0 3px 12px var(--primary-glow); filter: none;
+}}
+.stApp button[kind^="secondary"] {{
+    background: var(--surface-alt); border: 1px solid var(--border); color: var(--text-muted);
+    border-radius: var(--r-md) !important; transition: background .15s, border-color .15s, transform .08s;
+}}
+.stApp button[kind^="secondary"]:hover {{
+    background: var(--surface-hover); border-color: var(--border-bright); color: var(--text); filter: none;
+}}
+.stApp button:active {{ transform: scale(.97); }}
+.stApp button:focus-visible {{ outline: 2px solid var(--primary); outline-offset: 2px; }}
+/* Inputs: .form-input (fundo surface-alt, anel de foco). Streamlit 1.62 usa react-aria (sem
+   `data-baseweb`): o contorno visível mora no div pai do <input>/<textarea>. */
+[data-testid="stTextInput"] div:has(> input), [data-testid="stTextArea"] div:has(> textarea),
+[data-testid="stDateInput"] div:has(> input), [data-testid="stNumberInputContainer"],
+.stApp .react-aria-ComboBox > [role="group"] {{
+    background: var(--surface-alt) !important; border-color: var(--border) !important;
+    border-radius: var(--r-md) !important; transition: border-color .15s, box-shadow .15s;
+}}
+[data-testid="stTextInput"] div:has(> input):focus-within, [data-testid="stTextArea"] div:has(> textarea):focus-within,
+[data-testid="stDateInput"] div:has(> input):focus-within, [data-testid="stNumberInputContainer"]:focus-within,
+.stApp .react-aria-ComboBox > [role="group"]:focus-within {{
+    border-color: var(--primary) !important; box-shadow: var(--glow-ring);
+}}
+.stApp input::placeholder, .stApp textarea::placeholder {{ color: var(--text-subtle) !important; }}
+/* Checkbox e toggle marcados na cor do tema (o `primaryColor` do config.toml é fixo). */
+[data-testid="stCheckbox"] label[data-selected="true"] > div:not([data-testid]) {{
+    background: var(--primary) !important; border-color: var(--primary) !important;
+}}
+/* Formulários e containers com borda: .card */
+div[data-testid="stForm"] {{ border-color: var(--border) !important; border-radius: var(--r-lg) !important; }}
+div[data-testid="stExpander"] details {{
+    background: var(--surface); border: 1px solid var(--border) !important;
+    border-radius: var(--r-lg) !important; box-shadow: var(--shadow-sm);
+}}
+div[data-testid="stExpander"] summary:hover {{ color: var(--primary); }}
+/* Abas: .nav-btn.active */
+.stApp [data-testid="stTab"] p {{ color: var(--text-muted) !important; }}
+.stApp [data-testid="stTab"]:hover p {{ color: var(--text) !important; }}
+.stApp [data-testid="stTab"][aria-selected="true"] p {{ color: var(--primary) !important; font-weight: 600; }}
+/* Barra de progresso na cor do tema */
+div[data-testid="stProgress"] div[role="progressbar"] > div > div {{
+    background: linear-gradient(90deg, var(--primary), var(--primary-hover)) !important;
+}}
+/* Toast (st.toast): .toast */
+div[data-testid="stToast"] {{
+    background: var(--surface-alt) !important; border: 1px solid var(--border);
+    border-radius: var(--r-md) !important; box-shadow: var(--shadow-md);
+}}
+/* Código e tabelas */
+.stApp code {{ font-family: 'Share Tech Mono', ui-monospace, monospace !important; color: var(--primary); }}
+div[data-testid="stCode"] pre {{ background: var(--surface-alt) !important; border: 1px solid var(--border); }}
+div[data-testid="stTable"] th {{ background: var(--surface-alt); color: var(--text-muted); }}
+div[data-testid="stTable"] td {{ border-color: var(--border-muted); }}
+.stApp [data-testid="stCaptionContainer"] p {{ color: var(--text-muted) !important; }}
 .stApp, [data-testid="stHeader"] {{ background: {t["bg"]}; color: {t["text"]}; }}
 [data-testid="stSidebar"] {{ background: {t["surface"]}; border-right: 1px solid {t["border"]}; }}
 .stApp, .stApp p, .stApp label, .stApp h1, .stApp h2, .stApp h3, .stApp li,
@@ -329,8 +416,6 @@ def _theme_css(name: str) -> str:
 /* Logo Blau já fica no topo da sidebar; no cabeçalho ele colidia com a marca da Topbar. */
 [data-testid="stHeader"] [data-testid="stHeaderLogo"], [data-testid="stHeader"] [data-testid="stLogoLink"] {{ display: none !important; }}
 .stApp a {{ color: {t["primary"]}; }}
-.stApp button[kind="primary"] {{ background: {t["primary"]}; border-color: {t["primary"]}; color: {t["bg"]}; }}
-div[data-baseweb="input"], div[data-baseweb="select"] > div {{ background: {t["surface_alt"]}; }}
 .bmt-topbar {{
     position: fixed; top: 0; left: 0; right: 0; height: 52px; z-index: 999992;
     background: {t["surface"]}; border-bottom: 1px solid {t["border"]};
@@ -346,16 +431,28 @@ div[data-baseweb="input"], div[data-baseweb="select"] > div {{ background: {t["s
 @keyframes bmtShimmer {{ from {{ background-position: 0% 0; }} to {{ background-position: 200% 0; }} }}
 .bmt-brand-icon {{
     width: 30px; height: 30px; border-radius: 8px; background: {t["primary"]}; color: {t["bg"]};
-    display: flex; align-items: center; justify-content: center; font-weight: 700;
-    box-shadow: 0 0 0 1px {t["primary_soft"]}, 0 2px 8px {t["primary_soft"]};
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 0 1px {t["primary_soft"]}, 0 2px 8px {t["primary_glow"]};
+    animation: bmtBrandGlow 3s ease-in-out infinite;
+}}
+@keyframes bmtBrandGlow {{
+    0%, 100% {{ box-shadow: 0 0 0 1px {t["primary_soft"]}, 0 2px 8px {t["primary_glow"]}; }}
+    50% {{ box-shadow: 0 0 0 4px {t["primary_soft"]}, 0 4px 20px {t["primary_glow"]}; }}
 }}
 .bmt-brand-text {{ display: flex; flex-direction: column; line-height: 1; }}
-.bmt-brand-name {{ font-size: .875rem; font-weight: 700; letter-spacing: .02em; }}
-.bmt-brand-tag {{ font-size: .6rem; letter-spacing: .07em; text-transform: uppercase; opacity: .55; margin-top: .2rem; }}
-.bmt-brand-by {{
-    margin-left: .5rem; padding: .15rem .6rem; border-radius: 4px; font-size: .68rem; font-weight: 700;
-    letter-spacing: .04em; border: 1px solid {t["border"]}; background: {t["surface_alt"]};
+.bmt-brand-name {{ font-size: .875rem; font-weight: 700; letter-spacing: .02em; color: {t["text"]}; }}
+.bmt-brand-tag {{ font-size: .6rem; letter-spacing: .07em; text-transform: uppercase; color: {t["text_subtle"]}; margin-top: .2rem; }}
+.bmt-brand-divider {{ width: 1px; height: 22px; background: {t["border"]}; margin: 0 .25rem; }}
+/* Selo "SwordPower" em forma de espada (mesmo SVG do input_arquivos) */
+.bmt-brand-by {{ position: relative; width: 140px; height: 26px; display: flex; align-items: center; opacity: .9; }}
+.bmt-brand-by svg {{ position: absolute; inset: 0; width: 100%; height: 100%; }}
+.bmt-brand-by span {{
+    position: relative; z-index: 1; margin-left: 30px; font-size: .68rem; font-weight: 800;
+    letter-spacing: .05em; color: #f0fdf4;
+    text-shadow: 0 1px 2px rgba(0,0,0,.85), 0 0 1px rgba(0,0,0,.9);
 }}
+@media (max-width: 900px) {{ .bmt-brand-divider, .bmt-brand-by, .bmt-brand-tag {{ display: none; }} }}
+@media (prefers-reduced-motion: reduce) {{ .bmt-brand-icon {{ animation: none; }} }}
 /* Header transparente ACIMA da topbar: é nele que mora o botão de reabrir a sidebar. */
 [data-testid="stHeader"] {{ height: 52px; background: transparent; z-index: 999995; }}
 /* Botão de reabrir a sidebar: canto esquerdo da Topbar, acima da Activity Bar (sem isso ele
@@ -365,15 +462,39 @@ div[data-baseweb="input"], div[data-baseweb="select"] > div {{ background: {t["s
 }}
 [data-testid="stSidebar"] > div:first-child {{ padding-top: 52px; }}
 .block-container {{ padding-top: 4.5rem !important; }}
-/* Botão Sair na Topbar (canto direito, à esquerda do indicador "Running/Stop" e do menu de 3 pontos do Streamlit). */
-[class*="st-key-bmt-logout"] {{
-    position: fixed; top: 9px; right: 12rem; z-index: 999996; width: auto !important;
+/* Ações do usuário na Topbar (canto direito): selo online, saudação, Admin, Minha senha,
+   Configurações, Sair — como o `.topbar-right` do input_arquivos. Widgets reais do Streamlit
+   (container `bmt-acoes`, montado em scripts/auth.py) posicionados por cima da Topbar. */
+[class*="st-key-bmt-acoes"] {{
+    position: fixed; top: 9px; right: 3.4rem; z-index: 999996; width: auto !important;
+    flex-wrap: nowrap !important; align-items: center; gap: .45rem !important;
 }}
-[class*="st-key-bmt-logout"] button {{
-    min-height: 2.1rem; padding: 0 .75rem; background: {t["surface_alt"]};
-    border: 1px solid {t["border"]}; color: {t["text"]};
+[class*="st-key-bmt-acoes"] > div {{ width: auto !important; flex: 0 0 auto !important; }}
+[class*="st-key-bmt-acoes"] button, [class*="st-key-bmt-acoes"] [data-testid="stPageLink"] a {{
+    min-height: 2rem; height: 2rem; padding: 0 .75rem; background: {t["surface_alt"]} !important;
+    border: 1px solid {t["border"]} !important; border-radius: {t["radius"]} !important;
+    color: {t["text_muted"]}; font-size: .8125rem; margin: 0;
 }}
-[class*="st-key-bmt-logout"] button:hover {{ border-color: {t["primary"]}; color: {t["primary"]}; }}
+[class*="st-key-bmt-acoes"] button p, [class*="st-key-bmt-acoes"] [data-testid="stPageLink"] a p {{
+    font-size: .8125rem !important; color: {t["text_muted"]} !important; font-weight: 500;
+}}
+[class*="st-key-bmt-acoes"] button:hover, [class*="st-key-bmt-acoes"] [data-testid="stPageLink"] a:hover {{
+    background: {t["surface_hover"]} !important; border-color: {t["border_bright"]} !important;
+}}
+[class*="st-key-bmt-acoes"] button:hover p, [class*="st-key-bmt-acoes"] a:hover p {{ color: {t["text"]} !important; }}
+.bmt-conn {{
+    display: inline-flex; align-items: center; gap: .35rem; padding: .15rem .55rem; border-radius: 6px;
+    font-size: .72rem; font-weight: 600; color: {t["success"]}; background: rgba(34,197,94,.1);
+    border: 1px solid rgba(34,197,94,.3); white-space: nowrap;
+}}
+.bmt-conn::before {{ content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }}
+.bmt-conn--off {{ color: {t["warn"]}; background: rgba(245,158,11,.1); border-color: rgba(245,158,11,.3); }}
+.bmt-hello {{ font-size: .75rem; color: {t["text_muted"]}; white-space: nowrap; }}
+/* Em telas menores que um notebook fica só o ícone (o `help` do botão explica a ação). */
+@media (max-width: 1180px) {{
+    [class*="st-key-bmt-acoes"] button p, [class*="st-key-bmt-acoes"] [data-testid="stPageLink"] a p,
+    .bmt-hello {{ display: none; }}
+}}
 /* Activity Bar vertical (estilo VSCode): coluna fixa de 56px à esquerda, abaixo da Topbar.
    O `padding-left` empurra sidebar + conteúdo pra direita (só existe se a barra existe —
    `:has`, então a tela de login não ganha a faixa vazia). */
@@ -409,12 +530,24 @@ div[data-baseweb="input"], div[data-baseweb="select"] > div {{ background: {t["s
 }}
 </style>
 <div class="bmt-topbar">
-  <div class="bmt-brand-icon">⚡</div>
+  <div class="bmt-brand-icon">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </div>
   <div class="bmt-brand-text">
     <span class="bmt-brand-name">Invest SAP</span>
-    <span class="bmt-brand-tag">Vendas &amp; Pendências</span>
+    <span class="bmt-brand-tag">Vendas &amp; Pendências · SwordPower Web</span>
   </div>
-  <span class="bmt-brand-by">SwordPower</span>
+  <div class="bmt-brand-divider"></div>
+  <div class="bmt-brand-by" title="SwordPower">
+    <svg viewBox="0 0 140 26" preserveAspectRatio="none" fill="none">
+      <circle cx="7" cy="13" r="3.5" fill="#d29922"/>
+      <rect x="11.5" y="10.5" width="7" height="5" rx="1.2" fill="#d29922"/>
+      <rect x="19.5" y="6" width="2.6" height="14" rx="1.2" fill="#e6edf3"/>
+      <path d="M22 11.5 L133 9.5 L139 13 L133 16.5 L22 14.5 Z" fill="#10b981" opacity=".9"/>
+      <path d="M22 12.2 L131 10.6 L131 15.4 L22 13.8 Z" fill="#5eead4" opacity=".4"/>
+    </svg>
+    <span>SwordPower</span>
+  </div>
 </div>
 """
 
@@ -426,8 +559,8 @@ def apply_custom_theme() -> None:
     do módulo pro porquê de bastar uma chamada só e por que é `st.logo()`, não
     `st.markdown` dentro de `st.sidebar`. O tema (Corporativo/Verde Neutro/Cyber Dark/Blau)
     é o mesmo conjunto do app_template e fica em `st.session_state["app_theme"]`; o seletor
-    é renderizado por `render_theme_selector()` (chamada depois da navegação, no rodapé
-    da sidebar) — aqui só se lê o valor já escolhido.
+    fica no diálogo "Configurações" da Topbar (`dialog_configuracoes()`) — aqui só se lê o
+    valor já escolhido.
     """
     st.markdown(_CSS, unsafe_allow_html=True)
     if _SS_THEME not in st.session_state:
@@ -444,15 +577,103 @@ def apply_custom_theme() -> None:
     )
 
 
-def render_theme_selector() -> None:
-    """Seletor de tema na sidebar (mesmos 3 temas do app_template + Blau)."""
-    with st.sidebar:
-        st.selectbox(
-            "Tema",
-            list(THEMES),
-            format_func=lambda k: THEMES[k]["label"],
-            key=_SS_THEME,
+_SS_THEME_WIDGET = "_app_theme_sel"
+
+
+def _aplicar_tema_escolhido() -> None:
+    """Callback do seletor: copia o valor do widget para a chave persistente do tema.
+
+    O widget vive num diálogo; quando o diálogo fecha, o Streamlit descarta a chave do
+    widget — por isso o tema fica numa chave própria (`app_theme`), não na do widget.
+    """
+    st.session_state[_SS_THEME] = st.session_state[_SS_THEME_WIDGET]
+
+
+@st.dialog("Configurações de Aparência")
+def dialog_configuracoes() -> None:
+    """Diálogo "Configurações" da Topbar (mesmo modal do app_template/input_arquivos)."""
+    st.session_state[_SS_THEME_WIDGET] = st.session_state.get(_SS_THEME, DEFAULT_THEME)
+    st.selectbox(
+        "Tema da interface",
+        list(THEMES),
+        format_func=lambda k: THEMES[k]["label"] + (" (padrão)" if k == DEFAULT_THEME else ""),
+        key=_SS_THEME_WIDGET,
+        on_change=_aplicar_tema_escolhido,
+    )
+    st.caption(
+        "Vale para esta sessão. O tema padrão de novas sessões e o bloqueio por inatividade "
+        "são definidos pelo admin em Administração → Configurações."
+    )
+    if st.button("Fechar", type="primary", use_container_width=True):
+        st.rerun()
+
+
+def section_header(icone: str, titulo: str, subtitulo: str = "") -> None:
+    """Cabeçalho de seção: ícone em quadrado + título + subtítulo (padrão input_arquivos).
+
+    Args:
+        icone: Emoji ou caractere curto exibido no quadrado.
+        titulo: Título da seção.
+        subtitulo: Linha de descrição opcional.
+    """
+    sub = f'<div class="bmt-sec-sub">{html.escape(subtitulo)}</div>' if subtitulo else ""
+    st.markdown(
+        f'''<div class="bmt-sec"><div class="bmt-sec-icon">{html.escape(icone)}</div>
+<div><div class="bmt-sec-title">{html.escape(titulo)}</div>{sub}</div></div>''',
+        unsafe_allow_html=True,
+    )
+
+
+def badge(texto: str, tipo: str = "muted") -> str:
+    """HTML de um selo arredondado (`.status-badge` do input_arquivos), já escapado.
+
+    Args:
+        texto: Texto do selo.
+        tipo: "success", "error", "warn", "primary" ou "muted".
+
+    Returns:
+        String HTML para compor em `st.markdown(..., unsafe_allow_html=True)`.
+    """
+    tipo = tipo if tipo in ("success", "error", "warn", "primary", "muted") else "muted"
+    return f'<span class="bmt-pill bmt-pill--{tipo}">{html.escape(texto)}</span>'
+
+
+def html_table(colunas: list[str], linhas: list[list[str]]) -> None:
+    """Tabela HTML no estilo do input_arquivos (para listas curtas com selos).
+
+    Args:
+        colunas: Cabeçalhos (texto puro, escapado aqui).
+        linhas: Células já em HTML seguro — texto vindo de dado precisa passar por
+            `html.escape` (ou `badge()`, que já escapa) antes de chegar aqui.
+    """
+    cab = "".join(f"<th>{html.escape(c)}</th>" for c in colunas)
+    corpo = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in linha) + "</tr>" for linha in linhas)
+    st.markdown(
+        f'<div class="bmt-table-wrap"><table class="bmt-table"><thead><tr>{cab}</tr></thead>'
+        f"<tbody>{corpo}</tbody></table></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def nav_card(key: str, icone: str, titulo: str, descricao: str, pagina: str, rotulo_link: str) -> None:
+    """Card de navegação (painel de administração do input_arquivos).
+
+    Args:
+        key: Sufixo único da key do container.
+        icone: Emoji do quadrado.
+        titulo: Título do card.
+        descricao: Descrição curta.
+        pagina: Caminho do arquivo da página de destino (ex.: "pages/91_Admin_Usuarios.py").
+        rotulo_link: Texto do link (ex.: "Gerenciar Usuários →").
+    """
+    with st.container(key=f"bmt-navcard-{key}", border=True):
+        st.markdown(
+            f'''<div class="bmt-navcard-icon">{html.escape(icone)}</div>
+<div class="bmt-navcard-title">{html.escape(titulo)}</div>
+<div class="bmt-navcard-desc">{html.escape(descricao)}</div>''',
+            unsafe_allow_html=True,
         )
+        st.page_link(pagina, label=rotulo_link)
 
 
 def render_filtro_periodo_tipo_cliente(key_prefix: str = "flt") -> None:

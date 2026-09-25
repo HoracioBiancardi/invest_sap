@@ -76,14 +76,34 @@ def test_leitor_nao_acessa_pagina_admin(monkeypatch):
     assert not at.tabs
 
 
-def test_admin_ve_pagina_admin_com_abas(monkeypatch):
+def test_admin_ve_painel_com_cards(monkeypatch):
     monkeypatch.setenv("APP_ACCESS_KEY", "segredo-teste-123")
-    at = AppTest.from_file(str(ADMIN_PAGE), default_timeout=15).run()
+    at = AppTest.from_file(str(APP), default_timeout=30).run()
     _login(at, "admin", "segredo-teste-123")
+    at.switch_page("pages/90_Admin.py").run()
     assert not at.exception
-    assert [t.label for t in at.tabs][:3] == ["Usuários", "Configurações", "Dados de negócio"]
+    assert any("Painel de Administração" in t.value for t in at.title)
+    assert any("bmt-navcard-title" in m.value and "Controle de Usuários" in m.value for m in at.markdown)
+
+
+def test_leitor_nao_acessa_subpaginas_admin(monkeypatch):
+    monkeypatch.setenv("APP_ACCESS_KEY", "segredo-teste-123")
+    app_db.criar_usuario("admin", "segredo-teste-123", role="admin", must_change_password=False)
+    app_db.criar_usuario("leitor1", "senha-forte-123", role="leitor", must_change_password=False)
+    for pagina in ("91_Admin_Usuarios", "92_Admin_Configuracoes", "93_Admin_Dados", "94_Admin_Cofre", "95_Admin_Auditoria"):
+        at = AppTest.from_file(str(ADMIN_PAGE.parent / f"{pagina}.py"), default_timeout=15).run()
+        _login(at, "leitor1", "senha-forte-123")
+        assert any("restrito a administradores" in e.value for e in at.error), pagina
+
+
+def test_admin_abre_subpaginas_sem_erro(monkeypatch):
+    monkeypatch.setenv("APP_ACCESS_KEY", "segredo-teste-123")
+    for pagina in ("91_Admin_Usuarios", "92_Admin_Configuracoes", "94_Admin_Cofre", "95_Admin_Auditoria"):
+        at = AppTest.from_file(str(ADMIN_PAGE.parent / f"{pagina}.py"), default_timeout=15).run()
+        _login(at, "admin", "segredo-teste-123")
+        assert not at.exception, pagina
 
 
 def test_csv_exportado_neutraliza_formula():
-    src = ADMIN_PAGE.read_text()
+    src = (ADMIN_PAGE.parent / "93_Admin_Dados.py").read_text()
     assert '"="' in src and "_csv_seguro" in src

@@ -43,6 +43,28 @@ origens:
 Todos os scripts abaixo usam `scripts/db.py`, que já lê essas variáveis — não escreva
 lógica de conexão nova, importe daí.
 
+### 2.1 Cofre de credenciais (recomendado)
+
+Pra não deixar essas credenciais em texto puro no `.env`, elas podem ir pro **cofre** no banco
+local do app (`data/app.db`, tabela `vault`) — `scripts/credential_vault.py`, porte do
+`crypto_vault_service` do app_template: Fernet + PBKDF2-HMAC-SHA256 (600.000 iterações, salt
+aleatório), com uma **senha mestra** (mín. 10 caracteres, força Forte) que não é gravada em
+lugar nenhum.
+
+1. Admin → aba **Cofre** → os campos vêm preenchidos com o `.env` atual → defina a senha
+   mestra → **Criar cofre**.
+2. Apague do `.env` as variáveis `HANA_*`, `DDIC_SCHEMA` e `SQLSERVER_*` (a aba lista as que
+   ainda estão lá) e reinicie o app.
+3. A cada reinício do app, o cofre sobe **bloqueado**: o admin vê a tela "Cofre de credenciais
+   bloqueado" e digita a senha mestra; leitores veem um aviso até isso acontecer. A página
+   Admin fica acessível mesmo com o cofre bloqueado.
+
+Regras: cofre configurado → o `.env` é **ignorado** para essas chaves; sem cofre → `.env`, como
+antes. Nos CLIs de `scripts/` (terminal interativo) a senha mestra é pedida via `getpass`.
+5 tentativas erradas bloqueiam o desbloqueio por 60s. Admin → Cofre também atualiza
+credenciais (senha vazia = manter), troca a senha mestra, bloqueia na hora e, se a senha mestra
+se perder, **apaga** o cofre para recadastrar. Eventos vão pro log de auditoria (`cofre_*`).
+
 ## 3. `scripts/db.py` — módulo base
 
 Funções pra importar em qualquer script/notebook novo:
@@ -284,15 +306,30 @@ Cliente+OrgVendas+Canal+Setor).
 
 ### 9.2 Tema visual
 
-`.streamlit/config.toml` define um tema escuro consistente pra todas as páginas — não
-precisa (e não deve) repetir CSS inline por página. Paleta extraída do CSS público de
-**blaumotorsport.com.br** em 2026-08-25 (`#26b4e9` ciano de destaque, `#2f343c` painel
-escuro do `.navbar-inverse`, fonte "Roboto"); o ciano bate com a cor de marca do site
-institucional blau.com (`#36b3e3`), confirmando que é a cor real da Blau em toda a empresa,
-não só do time de motorsport. Sidebar usa o `#2f343c` (a cor real da navbar do site) pra um
-contraste sutil com o conteúdo principal, que fica um pouco mais escuro (`#1C1F26`). Pra
-mudar a paleta, edite só esse arquivo — chaves disponíveis (inclusive `[theme.sidebar]`
-separado) documentadas em `streamlit/config.py` do pacote instalado.
+Padrão visual SwordPower (app_template / input_arquivos), aplicado em `scripts/ui_theme.py` e
+`.streamlit/config.toml`:
+
+- **Paleta base** (`config.toml`) = tema **Corporativo** do template (`#12141A` fundo,
+  `#5B8DEF` primária, fonte Inter). É ela que pinta o que CSS não alcança: gráficos
+  Vega/Altair (`chartCategoricalColors`), a grade do `st.dataframe` e widgets nativos.
+- **Temas** Corporativo (padrão), Verde Neutro, Cyber Dark e Blau (marca: a paleta original
+  `#26B4E9`/`#2F343C`/Roboto) — escolhidos em **Configurações** na Topbar (vale pra sessão);
+  o padrão de novas sessões fica em Administração → Configurações. Cada tema expõe os tokens
+  do template como variáveis CSS (`--primary`, `--surface`, `--border`, `--glow-ring`...).
+- **Topbar**: marca (raio + selo SwordPower em SVG) à esquerda; à direita selo de conexão
+  (`online` / `cofre bloqueado`), saudação, **Admin**, **Minha senha** (troca com senha atual,
+  medidor de força e gerador), **Configurações** e **Sair**. O indicador "Running/Stop" do
+  Streamlit vira um selo no canto inferior direito.
+- **Componentes**: título de página compacto + legenda; métricas em card (`--surface-alt`, valor
+  quebra linha em vez de cortar); `card()` sem faixa/bandeirinha; alertas escuros com borda
+  colorida (`.page-alert`); rótulos de campo em maiúsculo pequeno (`.form-label`). Helpers
+  reusáveis: `section_header()`, `badge()`, `html_table()`, `nav_card()`.
+- Seletores usam `data-testid`/react-aria do Streamlit instalado (1.62) — se o visual "voltar
+  ao padrão" depois de um upgrade, conferir os seletores primeiro.
+
+**Administração** (só admin): painel de cards (`pages/90_Admin.py`) → Usuários (91),
+Configurações (92), Dados de negócio (93), Cofre de credenciais (94, com "Testar conexão") e
+Auditoria (95). Todas acessíveis mesmo com o cofre bloqueado.
 
 Cada página faz consulta **ao vivo** em produção — não é um snapshot estático. Como os
 scripts de `query_vendas_sap.py` e `audit_pendencia_flow.py` já retornam `pandas.DataFrame`,

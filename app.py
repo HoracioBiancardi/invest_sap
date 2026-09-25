@@ -37,14 +37,14 @@ from __future__ import annotations
 import streamlit as st
 
 from scripts.db import DatabaseConnectionError
-from scripts.auth import require_login
-from scripts.ui_theme import apply_custom_theme, render_theme_selector
+from scripts.auth import render_acoes_topbar, require_cofre, require_login
+from scripts.ui_theme import apply_custom_theme
 
 st.set_page_config(
     page_title="SwordPower — Invest SAP", page_icon=":material/dashboard:", layout="wide"
 )
 apply_custom_theme()
-usuario = require_login()  # fail-closed: nada abaixo roda sem autenticar
+usuario = require_login(show_logout=False)  # fail-closed: nada abaixo roda sem autenticar
 
 SECTIONS = {
     "": [
@@ -108,10 +108,17 @@ SECTIONS = {
     ],
 }
 
+PAGINA_ADMIN = st.Page("pages/90_Admin.py", title="Painel", icon=":material/admin_panel_settings:")
+PAGINAS_ADMIN = [
+    PAGINA_ADMIN,
+    st.Page("pages/91_Admin_Usuarios.py", title="Usuários", icon=":material/group:"),
+    st.Page("pages/92_Admin_Configuracoes.py", title="Configurações", icon=":material/tune:"),
+    st.Page("pages/93_Admin_Dados.py", title="Dados de negócio", icon=":material/database:"),
+    st.Page("pages/94_Admin_Cofre.py", title="Cofre de credenciais", icon=":material/lock:"),
+    st.Page("pages/95_Admin_Auditoria.py", title="Auditoria", icon=":material/history:"),
+]
 if usuario["role"] == "admin":
-    SECTIONS["Administração"] = [
-        st.Page("pages/90_Admin.py", title="Admin", icon=":material/admin_panel_settings:")
-    ]
+    SECTIONS["Administração"] = PAGINAS_ADMIN
 
 # nome da seção -> (ícone, título completo, rótulo curto sob o ícone)
 _SECTION_ICONS = {
@@ -141,8 +148,12 @@ with st.sidebar:
     st.caption(_SECTION_ICONS[secao_atual][1].upper())
     for pagina in SECTIONS[secao_atual]:
         st.page_link(pagina)
-    st.divider()
-render_theme_selector()
+render_acoes_topbar(usuario, PAGINA_ADMIN)
+
+# Cofre de credenciais bloqueado (app reiniciado) trava tudo menos a Administração — por lá o
+# admin desbloqueia ou, se perdeu a senha mestra, apaga e recadastra.
+if pg not in PAGINAS_ADMIN:
+    require_cofre(usuario)
 
 try:
     pg.run()

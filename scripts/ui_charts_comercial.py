@@ -22,6 +22,9 @@ def grafico_meta_realizado(df: pd.DataFrame, categoria: str) -> alt.LayerChart:
             índice — `reset_index()` antes de chamar se vieram de um `groupby`).
         categoria: nome da coluna categórica do eixo X (ordem preservada como veio no `df`).
     """
+    if pd.api.types.is_datetime64_any_dtype(df[categoria]):
+        # Eixo categórico (:N) com datetime vira epoch em ms no rótulo ("1769914800000").
+        df = df.assign(**{categoria: df[categoria].dt.strftime("%Y-%m")})
     ordem = df[categoria].tolist()
     df = df.assign(
         Atingimento=lambda d: (d["Valor_Realizado"] / d["Meta_Valor"]).where(d["Meta_Valor"] > 0)
@@ -45,7 +48,7 @@ def grafico_meta_realizado(df: pd.DataFrame, categoria: str) -> alt.LayerChart:
             color=alt.Color(
                 "Tipo:N",
                 sort=["Meta", "Venda"],
-                scale=alt.Scale(domain=["Meta", "Venda"], range=["#94a3b8", "#2563eb"]),
+                scale=alt.Scale(domain=["Meta", "Venda"], range=["#9AA0AC", "#5B8DEF"]),
                 legend=alt.Legend(title=None, orient="top"),
             ),
             tooltip=[categoria, "Tipo", alt.Tooltip("Valor:Q", format=",.0f")],
@@ -62,8 +65,8 @@ def grafico_meta_realizado(df: pd.DataFrame, categoria: str) -> alt.LayerChart:
             scale=alt.Scale(domain=[0, teto_eixo]),
         ),
     )
-    linha = linha_base.mark_line(color="#f97316", point=True)
-    rotulo = linha_base.mark_text(dy=-12, color="#f97316", fontWeight="bold").encode(
+    linha = linha_base.mark_line(color="#F59E0B", point=True)
+    rotulo = linha_base.mark_text(dy=-12, color="#F59E0B", fontWeight="bold").encode(
         text=alt.Text("Atingimento:Q", format=".0%")
     )
 

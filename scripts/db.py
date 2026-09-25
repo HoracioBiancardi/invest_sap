@@ -1,6 +1,7 @@
 """Conexões reutilizáveis para o DW da Blau (SQL Server BRONZE/SILVER/GOLD e SAP HANA/Datasphere).
 
-Lê credenciais do .env na raiz do projeto (mesmas variáveis usadas em data-platform).
+Credenciais: do cofre cifrado no SQLite do app (`scripts/credential_vault.py`) quando ele está
+configurado; senão do .env na raiz do projeto (mesmas variáveis usadas em data-platform).
 Nunca commitar valores de .env; nunca logar senha.
 
 Uso típico:
@@ -14,7 +15,6 @@ Uso típico:
 
 from __future__ import annotations
 
-import os
 import urllib.parse
 from functools import lru_cache
 from typing import Any, Optional
@@ -24,6 +24,8 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
+
+from scripts.credential_vault import CofreError, CredentialVault
 
 load_dotenv()
 
@@ -44,13 +46,45 @@ class DatabaseConnectionError(RuntimeError):
     """
 
 
+def _config(name: str, default: Optional[str] = None) -> Optional[str]:
+    """Valor de configuração de conexão: cofre (se configurado) ou .env.
+
+    Args:
+        name: Nome da variável (ex.: "SQLSERVER_HOST").
+        default: Valor se ausente.
+
+    Returns:
+        O valor, ou `default`.
+
+    Raises:
+        DatabaseConnectionError: Cofre configurado e bloqueado.
+    """
+    try:
+        return CredentialVault.valor(name, default)
+    except CofreError as exc:
+        raise DatabaseConnectionError(str(exc)) from exc
+
+
 def _require_env(name: str) -> str:
-    value = os.environ.get(name)
+    value = _config(name)
     if not value:
-        raise RuntimeError(
-            f"Variável de ambiente {name} não definida. Verifique o arquivo .env na raiz do projeto."
-        )
+        origem = "no cofre de credenciais" if CredentialVault.configurado() else "no arquivo .env"
+        raise RuntimeError(f"Credencial {name} não definida {origem}.")
     return value
+
+
+_ENGINES: list[Engine] = []
+
+
+def engines_em_cache() -> list[Engine]:
+    """Engines criadas desde o último descarte (para `dispose()` ao trocar credenciais).
+
+    Returns:
+        As engines; a lista interna é esvaziada.
+    """
+    engines = list(_ENGINES)
+    _ENGINES.clear()
+    return engines
 
 
 @lru_cache(maxsize=None)
@@ -68,7 +102,7 @@ def get_sqlserver_engine(database: str = "GOLD") -> Engine:
         raise ValueError(f"database deve ser um de {VALID_DATABASES}, recebido: {database!r}")
 
     host = _require_env("SQLSERVER_HOST")
-    port = os.environ.get("SQLSERVER_PORT", "1433")
+    port = _config("SQLSERVER_PORT", "1433")
     user = _require_env("SQLSERVER_USER")
     password = _require_env("SQLSERVER_PASSWORD")
 
@@ -81,7 +115,9 @@ def get_sqlserver_engine(database: str = "GOLD") -> Engine:
         "TrustServerCertificate=yes;"
         "Encrypt=yes;"
     )
-    return create_engine(f"mssql+pyodbc:///?odbc_connect={params}", pool_pre_ping=True)
+    engine = create_engine(f"mssql+pyodbc:///?odbc_connect={params}", pool_pre_ping=True)
+    _ENGINES.append(engine)
+    return engine
 
 
 def read_sql(
@@ -108,15 +144,15 @@ def read_sql(
 
 
 def get_hana_config(schema: Optional[str] = None) -> dict[str, Any]:
-    """Monta os parâmetros de conexão do SAP HANA/Datasphere a partir do .env."""
+    """Monta os parâmetros de conexão do SAP HANA/Datasphere (cofre ou .env)."""
     return {
         "address": _require_env("HANA_ADDRESS"),
-        "port": int(os.environ.get("HANA_PORT", 443)),
+        "port": int(_config("HANA_PORT", "443")),
         "user": _require_env("HANA_USER"),
         "password": _require_env("HANA_PASSWORD"),
         "encrypt": True,
         "sslValidateCertificate": True,
-        "currentSchema": schema or os.environ.get("DDIC_SCHEMA", "IB_SAPECC"),
+        "currentSchema": schema or _config("DDIC_SCHEMA", "IB_SAPECC"),
     }
 
 

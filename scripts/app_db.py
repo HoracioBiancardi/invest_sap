@@ -1,36 +1,34 @@
 """Persistência local do app (SQLite, modo WAL) — usuários, configurações, solicitações de ajuste.
 
 Mesmo padrão do `db_service.py` do app_template: arquivo local, WAL, pragmas de performance.
-É um banco *do app*, separado do DW (SQL Server/HANA, que o app só lê). Fica em
+É um banco *do app*, separado do DW (SQL Server/HANA, que o app só lê). Também guarda o
+cofre cifrado das credenciais do DW (tabela `vault`, ver `scripts/credential_vault.py`). Fica em
 `data/app.db` (ignorado pelo git; pasta 0700, arquivo 0600) ou em `APP_DB_PATH`.
 
 Toda query usa bind params (`?`) — nunca f-string com valor vindo de fora.
-Senhas: PBKDF2-HMAC-SHA256 com salt aleatório (600.000 iterações, como o crypto_vault_service
-do template); comparação em tempo constante.
+Senhas: hash, geração e regra de força ficam em `scripts/password_service.py` (porte do
+crypto_vault_service do template); as funções de senha daqui só delegam pra ele.
 """
 
 from __future__ import annotations
 
-import base64
 import contextlib
-import hashlib
-import hmac
 import json
 import os
 import re
-import secrets
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
+from scripts.password_service import PasswordService
+
 ROLES = ("admin", "leitor")
 STATUS_AJUSTE = ("pendente", "aplicado", "recusado")
 TIPOS_AJUSTE = ("Cliente → Setor", "Meta", "Estrutura", "Outro")
 
-_ITERACOES = 600_000
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,32}$")
-MIN_SENHA = 10
+MIN_SENHA = PasswordService.MIN_TAMANHO
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -58,6 +56,11 @@ CREATE TABLE IF NOT EXISTS ajustes (
     criado_em TEXT NOT NULL,
     resolvido_em TEXT
 );
+CREATE TABLE IF NOT EXISTS vault (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    blob BLOB NOT NULL,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT NOT NULL,
@@ -72,8 +75,16 @@ class AppDbError(ValueError):
     """Erro de validação/regra de negócio, com mensagem pronta pra exibir na tela."""
 
 
-def _agora() -> str:
+def agora() -> str:
+    """Timestamp UTC no formato gravado no banco.
+
+    Returns:
+        Data/hora `YYYY-MM-DD HH:MM:SS` em UTC.
+    """
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+_agora = agora
 
 
 def db_path() -> Path:
@@ -105,31 +116,51 @@ def connect() -> Iterator[sqlite3.Connection]:
 
 
 def hash_password(senha: str) -> str:
-    salt = secrets.token_bytes(16)
-    dk = hashlib.pbkdf2_hmac("sha256", senha.encode(), salt, _ITERACOES)
-    return "pbkdf2_sha256${}${}${}".format(
-        _ITERACOES, base64.b64encode(salt).decode(), base64.b64encode(dk).decode()
-    )
+    """Hash PBKDF2 da senha (delegado a `PasswordService.hash`).
+
+    Args:
+        senha: Senha em texto puro.
+
+    Returns:
+        Hash no formato `pbkdf2_sha256$...`.
+    """
+    return PasswordService.hash(senha)
 
 
 def verify_password(senha: str, armazenado: str) -> bool:
-    try:
-        _, iteracoes, salt_b64, dk_b64 = armazenado.split("$")
-        dk = hashlib.pbkdf2_hmac(
-            "sha256", senha.encode(), base64.b64decode(salt_b64), int(iteracoes)
-        )
-        return hmac.compare_digest(dk, base64.b64decode(dk_b64))
-    except (ValueError, TypeError):
-        return False
+    """Confere senha contra hash em tempo constante (delegado a `PasswordService.verify`).
+
+    Args:
+        senha: Senha em texto puro.
+        armazenado: Hash guardado no banco.
+
+    Returns:
+        True se confere.
+    """
+    return PasswordService.verify(senha, armazenado)
 
 
 def validar_senha(senha: str) -> None:
-    if len(senha) < MIN_SENHA:
-        raise AppDbError(f"A senha precisa ter ao menos {MIN_SENHA} caracteres.")
+    """Exige tamanho mínimo e força mínima ("Média") da senha.
+
+    Args:
+        senha: Senha em texto puro.
+
+    Raises:
+        AppDbError: Se a senha é curta ou fraca; a mensagem lista o que falta.
+    """
+    problemas = PasswordService.problemas(senha)
+    if problemas:
+        raise AppDbError(" ".join(problemas))
 
 
 def gerar_senha_temporaria() -> str:
-    return secrets.token_urlsafe(12)
+    """Gera senha temporária forte (16 caracteres, todas as classes).
+
+    Returns:
+        A senha gerada.
+    """
+    return PasswordService.generate(16)
 
 
 # ── usuários ─────────────────────────────────────────────────────────────────

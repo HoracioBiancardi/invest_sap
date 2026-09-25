@@ -30,5 +30,6 @@ def test_app_bloqueado_sem_login(monkeypatch):
 def test_app_logado_renderiza_navegacao_e_tema(monkeypatch):
     at = _logado(monkeypatch)
     assert not at.exception
-    assert "Tema" in [s.label for s in at.selectbox]
+    rotulos = [b.label for b in at.button]
+    assert {"Minha senha", "Configurações", "Sair"} <= set(rotulos)
     assert any("bmt-topbar" in m.value for m in at.markdown)
