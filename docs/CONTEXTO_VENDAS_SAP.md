@@ -581,7 +581,7 @@ câmbio real do SAP, achada ao vivo no HANA — 65.398 linhas, cobertura boa des
 USD/UYU e desde 2025-07 pra COP; CLP não tem taxa real, só placeholder). Implementado em
 `scripts/query_vendas_sap.py::taxas_cambio_brl`/`converter_para_brl` (consulta HANA + `pandas
 merge_asof`, taxa mais próxima da data de cada linha) e no helper de UI
-`scripts/ui_theme.py::render_valor_convertido_brl` (mostra o total convertido, com a quebra
+`web/views/_comum.py::valor_convertido_brl` (mostra o total convertido, com a quebra
 por moeda original atrás de um `st.expander`). Aplicado em `0_Home.py`, `12_Painel_Vendas.py`,
 `22_Faturamento.py` e nas duas funções de Meta x Realizado — o resto do app (Vendedor,
 Produto\|Cliente, Cliente 360, Oportunidade, backlog) ainda usa o padrão anterior (moeda

@@ -1,13 +1,12 @@
-import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_streamlit_escuta_so_em_loopback():
-    cfg = tomllib.loads((ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8"))
-    assert cfg["server"]["address"] == "127.0.0.1"
-    assert cfg["server"]["enableXsrfProtection"] is True
+def test_app_web_escuta_so_em_loopback_por_padrao():
+    src = (ROOT / "web" / "__main__.py").read_text(encoding="utf-8")
+    assert 'os.environ.get("APP_HOST", "127.0.0.1")' in src
+    assert "workers=1" in src
 
 
 def test_env_example_sem_valores_reais():

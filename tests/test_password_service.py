@@ -3,12 +3,10 @@
 import string
 
 import pytest
-from streamlit.testing.v1 import AppTest
 
-from scripts import app_db, auth
+from scripts import app_db
 from scripts.password_service import PasswordService
 
-SCRIPT = "import streamlit as st\nfrom scripts.auth import require_login\nrequire_login()\nst.write('OK_PROTEGIDO')\n"
 
 
 def test_hash_e_verificacao():
@@ -69,43 +67,3 @@ def test_senha_fraca_recusada_ao_criar_usuario():
 
 def test_senha_temporaria_passa_na_validacao():
     app_db.validar_senha(app_db.gerar_senha_temporaria())
-
-
-def test_app_access_key_fraca_e_ignorada(monkeypatch):
-    monkeypatch.setenv("APP_ACCESS_KEY", "abcdefghijkl")
-    AppTest.from_string(SCRIPT, default_timeout=10).run()
-    admin = app_db.get_user("admin")
-    assert admin["must_change_password"] == 1
-    assert not app_db.verify_password("abcdefghijkl", admin["password_hash"])
-    assert auth._KEY_FILE.exists()
-
-
-def _login_troca(monkeypatch):
-    monkeypatch.delenv("APP_ACCESS_KEY", raising=False)
-    at = AppTest.from_string(SCRIPT, default_timeout=10).run()
-    senha = auth._KEY_FILE.read_text().split("senha: ")[1].strip()
-    at.text_input[0].set_value("admin")
-    at.text_input[1].set_value(senha)
-    at.button[0].click().run()
-    assert at.text_input[0].label == "Nova senha"
-    return at
-
-
-def test_troca_de_senha_recusa_fraca_e_mostra_medidor(monkeypatch):
-    at = _login_troca(monkeypatch)
-    at.text_input[0].set_value("abcdefghij").run()
-    assert any("bmt-forca" in m.value and "Fraca" in m.value for m in at.markdown)
-    at.text_input[1].set_value("abcdefghij")
-    at.button[0].click().run()
-    assert at.error and "mínimo é força Média" in at.error[0].value
-    assert app_db.get_user("admin")["must_change_password"] == 1
-
-
-def test_sugerir_senha_preenche_e_permite_salvar(monkeypatch):
-    at = _login_troca(monkeypatch)
-    at.button[1].click().run()
-    sugerida = at.code[0].value
-    assert at.text_input[0].value == sugerida == at.text_input[1].value
-    at.button[0].click().run()
-    assert any("OK_PROTEGIDO" in m.value for m in at.markdown)
-    assert app_db.verify_password(sugerida, app_db.get_user("admin")["password_hash"])

@@ -2369,7 +2369,7 @@ def faturamento_mensal(meses: int = 12, excluir_intercompany: bool = False) -> p
     Achado 2026-09-04: `fct_faturamento_itens_sap.Moeda` varia por linha (BRL/UYU/COP/USD/
     CLP, sem conversão — ver docs/CONTEXTO_VENDAS_SAP.md §10.0/§10.1). `Moeda` agora sai no
     grão do retorno (1 linha por Mes+Moeda) — quem consumir deve somar/mostrar por moeda
-    separada (`scripts/ui_theme.py::render_valor_por_moeda`), nunca juntar tudo num só R$.
+    separada (`web/ui.py::Node.valor_por_moeda`), nunca juntar tudo num só R$.
 
     Args:
         excluir_intercompany: ver `_condicao_excluir_intercompany` (config `excluir_intercompany`

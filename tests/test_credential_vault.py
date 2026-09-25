@@ -1,15 +1,11 @@
 """Testes do cofre de credenciais do DW (scripts/credential_vault.py) e da integração com db/app."""
 
-from pathlib import Path
-
 import pytest
 from cryptography.fernet import InvalidToken
-from streamlit.testing.v1 import AppTest
 
 from scripts import app_db, db
 from scripts.credential_vault import CofreError, CredentialVault, CryptoVault
 
-APP = Path(__file__).resolve().parent.parent / "app.py"
 MESTRA = "Mestra-Forte-2026!"
 CREDS = {
     "HANA_ADDRESS": "hana.exemplo", "HANA_PORT": "443", "HANA_USER": "u_hana",
@@ -112,34 +108,3 @@ def test_trocar_credencial_descarta_engine_cacheada():
     e2 = db.get_sqlserver_engine("GOLD")
     assert e1 is not e2
     assert "novo.host" in str(e2.url.query)
-
-
-def _app_logado(monkeypatch, usuario="admin", senha="segredo-teste-123"):
-    monkeypatch.setenv("APP_ACCESS_KEY", "segredo-teste-123")
-    at = AppTest.from_file(str(APP), default_timeout=30).run()
-    at.text_input[0].set_value(usuario)
-    at.text_input[1].set_value(senha)
-    at.button[0].click().run()
-    return at
-
-
-def test_app_trava_com_cofre_bloqueado_e_admin_desbloqueia(monkeypatch):
-    monkeypatch.setattr(db, "read_sql", lambda *a, **k: (_ for _ in ()).throw(db.DatabaseConnectionError("off")))
-    CredentialVault.criar(CREDS, MESTRA)
-    CredentialVault.bloquear()
-    at = _app_logado(monkeypatch)
-    assert at.text_input[0].label == "Senha mestra"
-    at.text_input[0].set_value(MESTRA)
-    next(b for b in at.button if b.label == "Desbloquear cofre").click().run()
-    assert CredentialVault.desbloqueado()
-    assert not any(t.label == "Senha mestra" for t in at.text_input)
-
-
-def test_leitor_ve_aviso_com_cofre_bloqueado(monkeypatch):
-    app_db.criar_usuario("admin", "segredo-teste-123", role="admin", must_change_password=False)
-    app_db.criar_usuario("leitor1", "senha-forte-123", role="leitor", must_change_password=False)
-    CredentialVault.criar(CREDS, MESTRA)
-    CredentialVault.bloquear()
-    at = _app_logado(monkeypatch, "leitor1", "senha-forte-123")
-    assert any("Peça a um administrador" in i.value for i in at.info)
-    assert not any(t.label == "Senha mestra" for t in at.text_input)

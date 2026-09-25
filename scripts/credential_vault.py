@@ -6,15 +6,14 @@ no disco. A cifragem é o porte do `crypto_vault_service.py` do app_template: Fe
 (600.000 iterações + salt aleatório de 16 bytes, gravado junto do blob cifrado).
 
 A senha mestra nunca é gravada. Depois de desbloqueado, o cofre guarda as credenciais
-decifradas só na memória do processo (compartilhadas por todas as sessões do Streamlit) até
+decifradas só na memória do processo (compartilhadas por todas as sessões do app web) até
 `bloquear()` ou o processo reiniciar — aí um admin precisa desbloquear de novo.
 
 Fonte das credenciais em `scripts/db.py` (`CredentialVault.valor`):
 - cofre configurado → só o cofre (o `.env` é ignorado para estas chaves);
 - cofre não configurado → `.env`, como antes (compatibilidade até migrar).
 
-Sem `streamlit` aqui (mesma convenção do resto de `scripts/`): a UI fica em `scripts/auth.py`
-e `pages/90_Admin.py`. Nos CLIs, `desbloquear_interativo()` pede a senha mestra via `getpass`.
+A UI fica em `web/views/admin_cofre.py` e na trava de `web/main.py`. Nos CLIs, `desbloquear_interativo()` pede a senha mestra via `getpass`.
 """
 
 from __future__ import annotations
@@ -116,8 +115,8 @@ class CryptoVault:
 class CredentialVault:
     """Cofre de credenciais do DW, persistido no `app.db` e desbloqueado na memória do processo.
 
-    Estado de classe (e não de instância) de propósito: o Streamlit roda todas as sessões no
-    mesmo processo, e o desbloqueio feito por um admin vale para todas até `bloquear()`.
+    Estado de classe (e não de instância) de propósito: o app web roda todas as sessões num
+    processo só, e o desbloqueio feito por um admin vale para todas até `bloquear()`.
 
     Attributes:
         MAX_FALHAS: Tentativas erradas de senha mestra antes do bloqueio temporário.
@@ -350,12 +349,12 @@ class CredentialVault:
 
     @classmethod
     def desbloquear_interativo(cls) -> None:
-        """Nos CLIs (terminal interativo, fora do Streamlit), pede a senha mestra via getpass.
+        """Nos CLIs (terminal interativo), pede a senha mestra via getpass.
 
-        Não faz nada se já desbloqueado, se não há terminal ou se roda dentro do Streamlit
-        (lá o desbloqueio é pela tela, por um admin).
+        Não faz nada se já desbloqueado, se não há terminal ou se `interativo` é False
+        (no app web o desbloqueio é pela tela, por um admin).
         """
-        if cls.desbloqueado() or not cls.interativo or not sys.stdin.isatty() or _dentro_do_streamlit():
+        if cls.desbloqueado() or not cls.interativo or not sys.stdin.isatty():
             return
         for _ in range(3):
             try:
@@ -411,17 +410,3 @@ class CredentialVault:
             "desbloqueado": cls.desbloqueado(),
             "origem": "cofre" if configurado else ".env",
         }
-
-
-def _dentro_do_streamlit() -> bool:
-    """Indica se o código roda dentro de um servidor Streamlit.
-
-    Returns:
-        True se há runtime Streamlit ativo.
-    """
-    try:
-        from streamlit import runtime
-
-        return runtime.exists()
-    except ImportError:
-        return False

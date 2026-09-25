@@ -293,3 +293,72 @@ def test_cache_expira():
     assert f() == 1 and f() == 1
     time.sleep(0.06)
     assert f() == 2
+
+
+# ── regras portadas dos testes do Streamlit ──────────────────────────────────
+
+
+def test_bootstrap_com_access_key_fraca_gera_senha_aleatoria(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_ACCESS_KEY", "abcdefghijkl")
+    monkeypatch.setattr(web_auth, "KEY_FILE", tmp_path / ".access_key")
+    web_auth.garantir_admin_inicial()
+    admin = app_db.get_user("admin")
+    assert admin["must_change_password"] == 1
+    assert not app_db.verify_password("abcdefghijkl", admin["password_hash"])
+    assert (tmp_path / ".access_key").stat().st_mode & 0o077 == 0
+
+
+def test_troca_obrigatoria_do_admin_inicial_apaga_arquivo(monkeypatch, tmp_path):
+    arquivo = tmp_path / ".access_key"
+    monkeypatch.delenv("APP_ACCESS_KEY", raising=False)
+    monkeypatch.setattr(web_auth, "KEY_FILE", arquivo)
+    web_auth.garantir_admin_inicial()
+    senha = arquivo.read_text().split("senha: ")[1].strip()
+    admin = web_auth.autenticar("admin", senha)
+    assert web_auth.trocar_senha_obrigatoria(admin, "abcdefghij", "abcdefghij")  # fraca: recusa
+    assert web_auth.trocar_senha_obrigatoria(admin, "Nova#Senha-2026z", "Nova#Senha-2026z") is None
+    assert not arquivo.exists()
+
+
+def test_mensagem_igual_para_usuario_inexistente(cliente):
+    r1 = _login(cliente, "naoexiste", "qualquer-coisa")
+    r2 = _login(cliente, "admin", "senha-errada-x")
+    assert r1.status_code == r2.status_code == 401
+    assert "Usuário ou senha inválidos." in r1.text and "Usuário ou senha inválidos." in r2.text
+
+
+def _cofre_bloqueado():
+    from scripts.credential_vault import CredentialVault
+
+    creds = {
+        "HANA_ADDRESS": "h", "HANA_PORT": "443", "HANA_USER": "u", "HANA_PASSWORD": "p", "DDIC_SCHEMA": "IB_SAPECC",
+        "SQLSERVER_HOST": "s", "SQLSERVER_PORT": "1433", "SQLSERVER_USER": "u", "SQLSERVER_PASSWORD": "p",
+    }
+    CredentialVault.criar(creds, "Mestra-Forte-2026!")
+    CredentialVault.bloquear()
+    return CredentialVault
+
+
+def test_cofre_bloqueado_trava_paginas_e_admin_desbloqueia(cliente):
+    cofre = _cofre_bloqueado()
+    _login(cliente)
+    r = cliente.get("/p/home")
+    assert "Cofre de credenciais bloqueado" in r.text and "senha_mestra" in r.text
+    csrf = re.search(r'X-CSRF-Token": "([^"]+)"', r.text).group(1)
+    r = cliente.post("/p/home", data={"_action": "desbloquear_cofre", "senha_mestra": "Mestra-Forte-2026!"},
+                     headers={"X-CSRF-Token": csrf, "HX-Request": "true"})
+    assert cofre.desbloqueado() and r.headers.get("HX-Redirect") == "/p/home"
+
+
+def test_leitor_ve_aviso_com_cofre_bloqueado(cliente):
+    _cofre_bloqueado()
+    app_db.criar_usuario("leitor1", "Outra#Senha-99z", role="leitor", must_change_password=False)
+    _login(cliente, "leitor1", "Outra#Senha-99z", "/p/home")
+    r = cliente.get("/p/home")
+    assert "Peça a um administrador" in r.text and "senha_mestra" not in r.text
+
+
+def test_csv_de_ajustes_neutraliza_formula():
+    from web.views.admin_dados import _csv_seguro
+
+    assert "'=HYPERLINK" in _csv_seguro([{"a": "=HYPERLINK(1)"}])
