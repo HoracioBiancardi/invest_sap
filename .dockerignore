@@ -1,0 +1,15 @@
+.venv
+.git
+.env
+.env.*
+data
+tests
+docs
+mkdocs
+validacao_local
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.claude
+.access_key

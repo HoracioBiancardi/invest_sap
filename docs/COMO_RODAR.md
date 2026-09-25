@@ -210,8 +210,33 @@ valor já lido da URL); consultas ao DW sempre via função decorada com `@cache
   ```
 - `APP_COOKIE_SECURE` fica `1` (padrão) atrás do HTTPS; `0` só para teste local em HTTP fora
   de `localhost`. `APP_FORWARDED_IPS` = IP do proxy (log com IP real).
-- Rodar como serviço (systemd) com `Restart=on-failure`; após cada reinício um admin
-  desbloqueia o cofre (tela aparece sozinha para admin).
+- Após cada reinício um admin desbloqueia o cofre (a tela aparece sozinha para admin).
+
+**Docker na VM (mesma do `input_arquivos`, `172.16.109.61`)** — mesmo padrão dele:
+`Dockerfile` (Python 3.12 + ODBC Driver 18 + fuso `America/Sao_Paulo`, roda sem root) e
+`docker-compose.yml` na porta **8005** (a 8004 é do `input_arquivos`).
+
+```bash
+git clone git@github.com:HoracioBiancardi/invest_sap.git && cd invest_sap
+cp .env.example .env          # preencher; APP_COOKIE_SECURE=0 enquanto o acesso for HTTP direto
+mkdir -p data && sudo chown 10001:10001 data
+docker compose up -d --build
+docker compose logs -f        # 1º start: senha do admin em data/.access_key (se APP_ACCESS_KEY vazia)
+```
+
+Acesso: `http://172.16.109.61:8005`. Para o HTTPS, use **um Caddy só para a VM** (o do
+`input_arquivos` está pronto e comentado no compose dele): ative-o, ponha os dois containers
+na mesma rede Docker e acrescente no Caddyfile dele um site para este app, por exemplo:
+
+```
+{$SITE_ADDRESS}:8443 {
+	tls internal
+	encode gzip
+	reverse_proxy invest-sap:8005
+}
+```
+
+Depois troque o bind deste compose para `"127.0.0.1:8005:8005"` e volte `APP_COOKIE_SECURE=1`.
 
 **Segurança:** sessão server-side (cookie só com token aleatório, banco guarda o hash),
 `HttpOnly`/`SameSite=Strict`/`Secure`, CSRF em todo POST, CSP `script-src 'self'` (bibliotecas

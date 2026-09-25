@@ -30,7 +30,8 @@ from scripts.password_service import PasswordService
 
 logger = logging.getLogger(__name__)
 
-KEY_FILE = Path(__file__).resolve().parent.parent / ".access_key"
+# No Docker, aponte para a pasta persistida (APP_ACCESS_KEY_FILE=/app/data/.access_key).
+KEY_FILE = Path(os.environ.get("APP_ACCESS_KEY_FILE") or Path(__file__).resolve().parent.parent / ".access_key")
 ADMIN_INICIAL = "admin"
 MAX_FALHAS_USUARIO = 5
 MAX_FALHAS_GLOBAL = 30
