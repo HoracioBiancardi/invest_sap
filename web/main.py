@@ -64,7 +64,7 @@ async def _ciclo_de_vida(_app: FastAPI) -> AsyncIterator[None]:
     Aquecedor.parar()
 
 
-app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, title="Invest SAP", lifespan=_ciclo_de_vida)
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, title="DataPlataform", lifespan=_ciclo_de_vida)
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
 
 templates = Jinja2Templates(directory=str(RAIZ / "templates"))
