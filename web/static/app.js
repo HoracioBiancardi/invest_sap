@@ -331,6 +331,15 @@
       });
       grupo.querySelectorAll(":scope > .aba-painel").forEach((p) => { p.hidden = p.dataset.painel !== abaLocal.dataset.abaLocal; });
     }
+    // Aba de servidor: o conteúdo da aba vira esqueleto na hora (o submit segue normalmente).
+    const aba = e.target.closest('button.aba[type="submit"]');
+    if (aba && !aba.classList.contains("aba--on")) {
+      const corpo = aba.closest(".abas") && aba.closest(".abas").nextElementSibling;
+      if (corpo && corpo.classList.contains("abas-corpo")) {
+        aba.parentElement.querySelectorAll(".aba").forEach((b) => b.classList.toggle("aba--on", b === aba));
+        corpo.innerHTML = ESQUELETO_ABA;  // HTML fixo, sem dado externo
+      }
+    }
     const usar = e.target.closest("[data-usar-senha]");
     if (usar) {
       const caixa = usar.closest("form, .acao");
@@ -400,12 +409,52 @@
     if (el._grafico) { redimensionar.unobserve(el); el._grafico.dispose(); el._grafico = null; }
     if (el._tabela) { el._tabela.destroy(); el._tabela = null; }
   });
-  document.addEventListener("htmx:beforeRequest", () => {
+  // ── troca de página: esqueleto imediato ──────────────────────────────────
+  // Link do menu (navegação boost) apaga o conteúdo atual na hora e mostra um esqueleto até a
+  // página nova chegar; o conteúdo antigo volta se a requisição falhar. Filtros não passam por
+  // aqui (é a mesma tela, só esmaece).
+  const ESQUELETO =
+    '<div class="esq" aria-busy="true" aria-label="Carregando página">' +
+    '<div class="esq-bloco esq-titulo"></div><div class="esq-bloco esq-linha"></div><div class="esq-bloco esq-linha esq-curta"></div>' +
+    '<div class="esq-metricas"><div class="esq-bloco"></div><div class="esq-bloco"></div><div class="esq-bloco"></div><div class="esq-bloco"></div></div>' +
+    '<div class="esq-bloco esq-grafico"></div><div class="esq-bloco esq-tabela"></div></div>';
+  const ESQUELETO_ABA =
+    '<div class="esq" aria-busy="true" aria-label="Carregando aba">' +
+    '<div class="esq-metricas"><div class="esq-bloco"></div><div class="esq-bloco"></div><div class="esq-bloco"></div><div class="esq-bloco"></div></div>' +
+    '<div class="esq-bloco esq-grafico"></div><div class="esq-bloco esq-tabela"></div></div>';
+  let mainAnterior = null;
+
+  function ehNavegacao(elt) {
+    return elt && elt.tagName === "A" && !elt.hasAttribute("hx-get") && !elt.hasAttribute("download");
+  }
+
+  document.addEventListener("htmx:beforeRequest", (e) => {
     const lateral = document.querySelector(".lateral.aberta");
     if (lateral) lateral.classList.remove("aberta");
+    const elt = e.detail.elt;
+    if (!ehNavegacao(elt)) return;
+    const main = document.getElementById("main");
+    if (!main) return;
+    // Destaca já no menu a página clicada.
+    if (elt.classList.contains("lateral-item")) {
+      document.querySelectorAll(".lateral-item--on").forEach((a) => a.classList.remove("lateral-item--on"));
+      elt.classList.add("lateral-item--on");
+    }
+    mainAnterior = main.cloneNode(true);
+    main.innerHTML = ESQUELETO;  // HTML fixo, sem dado externo
+    window.scrollTo(0, 0);
   });
-  document.addEventListener("htmx:responseError", () => toast("Falha ao carregar — tente de novo.", "erro"));
-  document.addEventListener("htmx:sendError", () => toast("Sem conexão com o servidor.", "erro"));
+  function restaurarMain() {
+    const main = document.getElementById("main");
+    if (mainAnterior && main && main.querySelector(".esq")) {
+      main.replaceWith(mainAnterior);
+      htmx.process(mainAnterior);
+    }
+    mainAnterior = null;
+  }
+  document.addEventListener("htmx:afterSwap", () => { mainAnterior = null; });
+  document.addEventListener("htmx:responseError", () => { restaurarMain(); toast("Falha ao carregar — tente de novo.", "erro"); });
+  document.addEventListener("htmx:sendError", () => { restaurarMain(); toast("Sem conexão com o servidor.", "erro"); });
 
   function aoCarregar() {
     if (window.htmx) htmx.onLoad(iniciar);
