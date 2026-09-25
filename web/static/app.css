@@ -54,7 +54,7 @@ code { font-family: "Share Tech Mono", ui-monospace, monospace; font-size: .92em
 /* ── casca: rail + lateral + área ─────────────────────────────────────────── */
 .shell { display: grid; grid-template-columns: 72px 232px minmax(0, 1fr); min-height: 100vh; }
 .rail { position: sticky; top: 0; height: 100vh; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0; overflow-y: auto; }
-.rail-marca img { width: 36px; height: 36px; object-fit: contain; margin-bottom: 8px; }
+.rail-marca img { width: 40px; height: 40px; object-fit: contain; margin-bottom: 8px; display: block; }
 .rail-item { width: 60px; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 2px; border-radius: var(--radius); color: var(--text-muted); text-decoration: none; font-size: 10.5px; border-left: 2px solid transparent; }
 .rail-item:hover { background: var(--surface-hover); color: var(--text); }
 .rail-item--on { color: var(--primary); background: var(--primary-dim); }

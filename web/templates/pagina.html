@@ -5,7 +5,7 @@
 <script src="/static/vendor/echarts.min.js?v={{ v }}" defer></script>
 <script src="/static/vendor/tabulator.min.js?v={{ v }}" defer></script>
 <script src="/static/app.js?v={{ v }}" defer></script>
-<title>{{ titulo }} · Invest SAP</title>
+<title>{{ titulo }} · DataPlataform</title>
 </head>
 <body hx-boost="true" hx-headers='{"X-CSRF-Token": "{{ csrf }}"}'>
 <a class="pular" href="#main">Pular para o conteúdo</a>
@@ -13,7 +13,7 @@
 <div class="shell{% if lateral_recolhida %} shell--recolhida{% endif %}">
   {% set secao_menu = secao_atual if secao_atual is not none else "" %}
   <nav class="rail" aria-label="Seções">
-    <a class="rail-marca" href="/p/home" title="Início"><img src="/static/blau_icon.png?v={{ v }}" alt="Blau"></a>
+    <a class="rail-marca" href="/p/home" title="Início"><img src="/static/blau_simbolo.png?v={{ v }}" alt="Blau"></a>
     {% for secao, paginas in menu.items() %}
       {% set ic, titulo_secao, curto = SECOES[secao] %}
       {# Seção com várias páginas: o clique só troca a lista do menu lateral (app.js), sem ir ao servidor. #}
@@ -38,7 +38,7 @@
   <div class="area">
     <header class="topo">
       <button type="button" class="topo-menu" data-alterna-lateral aria-label="Mostrar/esconder o menu lateral" title="Mostrar/esconder o menu lateral">{{ icone("menu") }}</button>
-      <div class="topo-marca">SwordPower <span>· Invest SAP</span></div>
+      <div class="topo-marca">HOPPER <span>· DataPlataform</span></div>
       <div class="topo-acoes">
         {% if cofre_liberado %}<span class="conexao">online</span>{% else %}<span class="conexao conexao--off">cofre bloqueado</span>{% endif %}
         <span class="ola">Olá, {{ usuario.username }}</span>
