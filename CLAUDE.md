@@ -15,7 +15,7 @@ rastreamento de pedido e lookup DDIC. Sem framework FastAPI/auth própria
 ```bash
 cd /home/swordpower/Documentos/REPO/PESSOAL/invest_sap
 uv sync
-uv run python -m web              # http://127.0.0.1:8000
+uv run invest-sap                 # http://127.0.0.1:8000 (= uv run python -m web; porta em APP_PORT)
 
 # Testes (pytest)
 uv run pytest -v
