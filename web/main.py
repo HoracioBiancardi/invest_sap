@@ -292,7 +292,14 @@ def raiz() -> Response:
     return RedirectResponse("/p/home", status_code=303)
 
 
+# O antigo painel de atalhos da Administração saiu (a lateral já lista as telas); links velhos
+# para /p/admin caem na primeira tela da seção.
+_SLUGS_ANTIGOS = {"admin": "/p/admin-usuarios"}
+
+
 def _pagina(request: Request, slug: str, form: Optional[dict[str, list[str]]]) -> Response:
+    if slug in _SLUGS_ANTIGOS:
+        return RedirectResponse(_SLUGS_ANTIGOS[slug], status_code=303)
     info = POR_SLUG.get(slug)
     sessao, usuario, desvio = _exigir_login(request)
     if desvio:

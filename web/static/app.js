@@ -87,6 +87,17 @@
     };
   }
 
+  // Altura da tabela: até ~440px e rola; com altura "tela", vai até o fim da janela (desconta a
+  // área de ações logo abaixo), para telas que são basicamente uma tabela (ex.: auditoria).
+  function alturaTabela(el, spec) {
+    if (spec.rows.length <= 14) return false;
+    if (spec.height === "tela") {
+      const topo = (el.querySelector(".tabela-alvo") || el).getBoundingClientRect().top + window.scrollY;
+      return Math.max(320, Math.round(window.innerHeight - topo - (spec.reserva || 128)));
+    }
+    return spec.height || 440;
+  }
+
   function montarTabela(el) {
     if (el._tabela || typeof Tabulator === "undefined") return;
     const spec = JSON.parse(el.querySelector(".tabela-dados").textContent);
@@ -112,7 +123,7 @@
     const opcoes = {
       data: spec.rows, columns: colunas, layout: "fitDataStretch",
       placeholder: "Sem dados", movableColumns: true, reactiveData: false,
-      height: spec.rows.length > 14 ? (spec.height || 440) : false,
+      height: alturaTabela(el, spec),
       columnDefaults: { resizable: true },
     };
     const sel = spec.select;
@@ -133,6 +144,13 @@
     el.insertBefore(barra, alvo);
     const tabela = new Tabulator(alvo, opcoes);
     el._tabela = tabela;
+    if (spec.height === "tela") {
+      // A página ainda se acomoda (fontes, textos) depois de montar: reajusta quando assenta e ao
+      // redimensionar a janela.
+      el._ajustarAltura = () => { if (el._tabela && el.isConnected) el._tabela.setHeight(alturaTabela(el, spec)); };
+      (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => requestAnimationFrame(el._ajustarAltura));
+      window.addEventListener("resize", el._ajustarAltura, { passive: true });
+    }
     barra.querySelector("button").addEventListener("click", () => {
       tabela.download("csv", (spec.file || "dados") + ".csv", { delimiter: ";", bom: true });
     });
@@ -554,6 +572,7 @@
   document.addEventListener("htmx:beforeCleanupElement", (e) => {
     const el = e.target;
     if (el._grafico) { redimensionar.unobserve(el); el._grafico.dispose(); el._grafico = null; }
+    if (el._ajustarAltura) { window.removeEventListener("resize", el._ajustarAltura); el._ajustarAltura = null; }
     if (el._tabela) { el._tabela.destroy(); el._tabela = null; }
   });
   // ── troca de página: esqueleto imediato ──────────────────────────────────

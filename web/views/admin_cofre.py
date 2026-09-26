@@ -132,15 +132,19 @@ def render(p: Pagina, ctx: Ctx) -> None:
     )
     if testar:
         _testar_conexoes(p)
-    p.caption(
+    explicacao = (
         "Cifradas no banco local do app (Fernet + PBKDF2, 600.000 iterações) com uma **senha mestra** "
         "que não é gravada em lugar nenhum. A cada reinício do app, um admin desbloqueia o cofre com ela."
     )
 
     if not estado["configurado"]:
-        p.warning("Cofre não configurado: as credenciais estão vindo do **.env** em texto puro.", "lock_open")
+        # Um aviso só (em vez de legenda + aviso + texto no card): a tela cabe sem rolar.
+        p.warning(
+            "Cofre não configurado: as credenciais estão vindo do **.env** em texto puro. Os campos abaixo "
+            "vêm preenchidos com o .env atual; confira e defina a senha mestra. " + explicacao,
+            "lock_open",
+        )
         with p.card() as card, card.acao("criar") as f:
-            f.markdown("Os campos vêm preenchidos com o .env atual; confira e defina a senha mestra.")
             _campos(f, "criar", {k: os.environ.get(k, "") for k in CHAVES if k not in SENHAS}, "Vazio = usar a senha atual do .env.")
             a, b = f.columns(2)
             a.text_input("Senha mestra", "mestra", tipo="password", autocomplete="new-password",
@@ -149,6 +153,7 @@ def render(p: Pagina, ctx: Ctx) -> None:
             f.submit("Criar cofre", icone_nome="lock")
         return
 
+    p.caption(explicacao)
     if not estado["desbloqueado"]:
         p.error("Cofre bloqueado: o app não consegue consultar o DW.", "lock")
         col, _ = p.columns([1, 1])

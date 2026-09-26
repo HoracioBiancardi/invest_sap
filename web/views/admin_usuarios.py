@@ -65,20 +65,6 @@ def render(p: Pagina, ctx: Ctx) -> None:
             senha_mostrada = (alvo["username"], temporaria)
 
     usuarios = app_db.listar_usuarios()
-    p.html_table(
-        ["Usuário", "Perfil", "Ativo", "Troca de senha pendente", "Criado em (UTC)"],
-        [
-            [
-                Markup(f"<strong>{escape(u['username'])}</strong>"),
-                p.badge(u["role"], "primario" if u["role"] == "admin" else "muted"),
-                _sim_nao(p, u["active"], "ok", "erro"),
-                _sim_nao(p, u["must_change_password"], "aviso", "muted"),
-                u["created_at"],
-            ]
-            for u in usuarios
-        ],
-    )
-
     col_novo, col_gerir = p.columns(2, gap="lg")
     with col_novo.card() as card, card.acao("criar_usuario", manter_valores=falhou_novo) as f:
         f.subheader(":material/person_add: Novo usuário")
@@ -116,3 +102,19 @@ def render(p: Pagina, ctx: Ctx) -> None:
                     "Redefinir senha", "redefinir_senha", primario=False, icone_nome="lock_reset",
                     confirmar=f"Gerar senha temporária para {alvo['username']}? As sessões abertas dele serão encerradas.",
                 )
+
+    # Lista embaixo dos formulários: as ações ficam à vista sem rolar.
+    with p.card(f"Usuários ({len(usuarios)})", icone_nome="group") as lista:
+        lista.html_table(
+            ["Usuário", "Perfil", "Ativo", "Troca de senha pendente", "Criado em (UTC)"],
+            [
+                [
+                    Markup(f"<strong>{escape(u['username'])}</strong>"),
+                    p.badge(u["role"], "primario" if u["role"] == "admin" else "muted"),
+                    _sim_nao(p, u["active"], "ok", "erro"),
+                    _sim_nao(p, u["must_change_password"], "aviso", "muted"),
+                    u["created_at"],
+                ]
+                for u in usuarios
+            ],
+        )

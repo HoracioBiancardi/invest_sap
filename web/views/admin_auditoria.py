@@ -20,13 +20,13 @@ def render(p: Pagina, ctx: Ctx) -> None:
     abas = p.tabs(["Audit log", "Cache de consultas"], "aba")
     if abas.ativa == 0:
         abas.corpo.caption("Últimos 200 eventos: logins, trocas de senha, cofre e alterações de configuração.")
-        abas.corpo.table(pd.DataFrame(app_db.listar_audit()), nome_arquivo="audit_log")
+        abas.corpo.table(pd.DataFrame(app_db.listar_audit()), nome_arquivo="audit_log", altura="tela")
     else:
         abas.corpo.caption(
             "Consultas ao DW guardadas em memória. As marcadas como pré-aquecidas são recalculadas "
             "em segundo plano antes de vencer, para ninguém esperar a consulta fria. Esvaziar força "
             "todo mundo a reconsultar o DW (use depois de uma carga corrigida no DW)."
         )
-        abas.corpo.table(pd.DataFrame(Cache.resumo()), nome_arquivo="cache")
+        abas.corpo.table(pd.DataFrame(Cache.resumo()), nome_arquivo="cache", altura="tela")
         with abas.corpo.acao("limpar_cache") as f:
             f.submit("Esvaziar cache", primario=False, icone_nome="delete_sweep", confirmar="Esvaziar o cache de todas as consultas?")

@@ -55,7 +55,6 @@ PAGINAS: tuple[InfoPagina, ...] = (
     InfoPagina("produto-cliente", "Produto / Cliente", "category", "Faturamento (Painel Vendas)", "produto_cliente"),
     InfoPagina("relatorio-analitico", "Relatório Analítico", "query_stats", "Faturamento (Painel Vendas)", "relatorio_analitico"),
     InfoPagina("auditoria", "Auditoria do Fluxo", "fact_check", "Técnico", "auditoria"),
-    InfoPagina("admin", "Painel", "admin_panel_settings", "Administração", "admin_painel", admin=True, sem_cofre=True),
     InfoPagina("admin-usuarios", "Usuários", "group", "Administração", "admin_usuarios", admin=True, sem_cofre=True),
     InfoPagina("admin-configuracoes", "Configurações", "tune", "Administração", "admin_configuracoes", admin=True, sem_cofre=True),
     InfoPagina("admin-dados", "Dados de negócio", "database", "Administração", "admin_dados", admin=True),

@@ -107,15 +107,15 @@ def render(p: Pagina, ctx: Ctx) -> None:
         with p.card() as card:
             card.table(_consultar(query, valor), nome_arquivo="fonte")
 
-    p.divider()
     p.subheader("Solicitações de ajuste")
     with p.card() as card, card.acao("novo_ajuste", manter_valores=falhou) as f:
-        a, b = f.columns(2)
+        # Os 4 campos curtos numa linha e o motivo com 2 linhas: a lista de solicitações cabe na tela.
+        a, b, c, d = f.columns(4)
         a.selectbox("Tipo", list(app_db.TIPOS_AJUSTE), "tipo")
-        a.text_input("Chave (ex.: código do cliente/setor)", "chave")
-        b.text_input("Valor atual (opcional)", "v_atual")
-        b.text_input("Valor proposto", "v_prop")
-        f.text_area("Motivo / justificativa", "motivo")
+        b.text_input("Chave (ex.: código do cliente/setor)", "chave")
+        c.text_input("Valor atual (opcional)", "v_atual")
+        d.text_input("Valor proposto", "v_prop")
+        f.text_area("Motivo / justificativa", "motivo", linhas=2)
         f.submit("Registrar solicitação", icone_nome="add")
 
     filtro = p.radio("Status", ["todos", *app_db.STATUS_AJUSTE], "ajuste_status")

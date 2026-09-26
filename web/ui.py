@@ -446,7 +446,7 @@ class Node:
         selecao: Optional[str] = None,
         coluna_selecao: Optional[str] = None,
         selecionado: Optional[str] = None,
-        altura: Optional[int] = None,
+        altura: Optional[int | str] = None,
         nome_arquivo: str = "dados",
     ) -> None:
         """Tabela interativa (ordenar, filtrar, redimensionar, baixar CSV).
@@ -460,7 +460,8 @@ class Node:
                 página) — equivalente ao `on_select` do `st.dataframe`.
             coluna_selecao: Coluna cujo valor vai para o parâmetro `selecao`.
             selecionado: Valor atualmente selecionado (destaca a linha).
-            altura: Altura máxima em px (default: cresce até ~440px e rola).
+            altura: Altura máxima em px (default: cresce até ~440px e rola); `"tela"` = até o fim da
+                janela, para telas que são basicamente uma tabela.
         """
         if indice:
             df = df.reset_index()

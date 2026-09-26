@@ -36,12 +36,12 @@ def cliente(monkeypatch):
     web_auth._lockouts.clear()
 
 
-def _login(c: TestClient, usuario: str = "admin", senha: str = SENHA_ADMIN, proximo: str = "/p/admin"):
+def _login(c: TestClient, usuario: str = "admin", senha: str = SENHA_ADMIN, proximo: str = "/p/admin-usuarios"):
     tok = re.search(r'name="_csrf" value="([^"]+)"', c.get("/login").text).group(1)
     return c.post("/login", data={"_csrf": tok, "usuario": usuario, "senha": senha, "next": proximo}, follow_redirects=False)
 
 
-def _csrf(c: TestClient, url: str = "/p/admin") -> str:
+def _csrf(c: TestClient, url: str = "/p/admin-usuarios") -> str:
     return re.search(r'X-CSRF-Token": "([^"]+)"', c.get(url).text).group(1)
 
 
@@ -60,7 +60,7 @@ def test_htmx_sem_login_recebe_hx_redirect(cliente):
 
 def test_login_ok_cria_cookie_httponly_samesite(cliente):
     r = _login(cliente)
-    assert r.status_code == 303 and r.headers["location"] == "/p/admin"
+    assert r.status_code == 303 and r.headers["location"] == "/p/admin-usuarios"
     cookie = r.headers["set-cookie"].lower()
     assert "httponly" in cookie and "samesite=strict" in cookie
 
@@ -87,7 +87,7 @@ def test_open_redirect_bloqueado(cliente):
 def test_sessao_expira_por_inatividade(cliente, monkeypatch):
     _login(cliente)
     monkeypatch.setattr(web_auth, "idle_segundos", lambda: -1)
-    assert cliente.get("/p/admin", follow_redirects=False).status_code == 303
+    assert cliente.get("/p/admin-usuarios", follow_redirects=False).status_code == 303
 
 
 def test_usuario_desativado_perde_sessao_na_hora(cliente):
@@ -121,7 +121,7 @@ def test_logout_apaga_sessao_e_storage(cliente):
     csrf = _csrf(cliente)
     r = cliente.post("/logout", data={"_csrf": csrf}, follow_redirects=False)
     assert r.headers.get("Clear-Site-Data") == '"storage"'
-    assert cliente.get("/p/admin", follow_redirects=False).status_code == 303
+    assert cliente.get("/p/admin-usuarios", follow_redirects=False).status_code == 303
 
 
 # ── CSRF, headers, ações ─────────────────────────────────────────────────────
@@ -159,7 +159,7 @@ def test_redefinir_senha_derruba_sessoes_do_alvo(cliente):
 
 def test_headers_de_seguranca(cliente):
     _login(cliente)
-    r = cliente.get("/p/admin")
+    r = cliente.get("/p/admin-usuarios")
     assert "script-src 'self'" in r.headers["Content-Security-Policy"]
     assert "frame-ancestors 'none'" in r.headers["Content-Security-Policy"]
     assert r.headers["X-Frame-Options"] == "DENY"
@@ -385,6 +385,13 @@ def test_post_de_outra_origem_recusado_mesmo_com_token(cliente):
 
 def test_casca_do_kit_com_ajustes_e_sem_seletor_de_tema_no_topo(cliente):
     _login(cliente)
-    html = cliente.get("/p/admin").text
+    html = cliente.get("/p/admin-usuarios").text
     assert 'id="ajustes"' in html and "data-abre-ajustes" in html and "data-filtra-lateral" in html
     assert 'class="tema-sel"' not in html and "data-sair" in html
+
+
+def test_painel_admin_saiu_e_link_antigo_vai_para_usuarios(cliente):
+    _login(cliente)
+    r = cliente.get("/p/admin", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/p/admin-usuarios"
+    assert 'href="/p/admin"' not in cliente.get("/p/admin-usuarios").text
