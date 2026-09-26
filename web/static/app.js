@@ -1,4 +1,5 @@
-/* Invest SAP — comportamento do lado do navegador.
+/* Invest SAP — comportamento do lado do navegador. Cópia do app.js do htmx_kit do app_template
+   (padrão do ecossistema), com as rotas/cookies daqui e a medição de força de senha.
  *
  * - Filtros: todo input com [data-w] pertence ao <form id="pf">; mudar o valor dispara o GET
  *   do HTMX (a página devolve só o <main>). Multi-seleção só dispara ao fechar a lista.
@@ -100,7 +101,7 @@
         formatter: (cell) => {
           const v = cell.getValue();
           if (v === null || v === undefined || v === "") { cell.getElement().classList.add("celula-vazia"); return "—"; }
-          return formatar(v, c.fmt);
+          return document.createTextNode(formatar(v, c.fmt));  // nó de texto: o Tabulator poria string como HTML
         },
         headerFilter: muitas && !numerico ? "input" : false,
         headerFilterPlaceholder: "filtrar…",
@@ -269,10 +270,28 @@
   }
 
   // ── inicialização de um trecho de DOM (página inteira ou parcial HTMX) ────
+  // todo campo de senha ganha o SHOW/HIDE (= ligarMostrarSenha da SPA)
+  function ligarMostrarSenha(raiz) {
+    if (!raiz.querySelectorAll) return;
+    raiz.querySelectorAll('input[type="password"]').forEach((campo) => {
+      if (campo.parentElement.querySelector("[data-mostra-senha]")) return;
+      const caixa = document.createElement("span");
+      caixa.className = "senha-caixa";
+      campo.replaceWith(caixa);
+      const botao = document.createElement("button");
+      botao.type = "button"; botao.className = "senha-mostra"; botao.dataset.mostraSenha = ""; botao.textContent = "SHOW";
+      caixa.append(campo, botao);
+    });
+  }
+
   function iniciar(raiz) {
+    ligarMostrarSenha(raiz);
+    if (raiz.querySelector && raiz.querySelector("[data-filtra-lateral]")) filtrarLateral();
     raiz.querySelectorAll(".tabela").forEach((el) => aoVisivel.observe(el));
     raiz.querySelectorAll(".grafico").forEach((el) => aoVisivel.observe(el));
     raiz.querySelectorAll("select[data-dim]").forEach((s) => { carregarDim(s).catch(() => {}); });
+    // consoles (logs, progresso) mostram sempre a última linha; htmx.onLoad também entrega o próprio .terminal (oob)
+    [raiz, ...raiz.querySelectorAll(".terminal")].forEach((t) => { if (t.classList && t.classList.contains("terminal")) t.scrollTop = t.scrollHeight; });
     raiz.querySelectorAll("template.toast-dados").forEach((t) => {
       toast(t.content.textContent, t.dataset.tipo);
       t.remove();
@@ -283,7 +302,7 @@
     const caixa = document.getElementById("toasts");
     if (!caixa) return;
     const el = document.createElement("div");
-    el.className = "toast" + (tipo === "erro" ? " toast--erro" : "");
+    el.className = "toast" + ({ erro: " toast--erro", aviso: " toast--aviso", info: " toast--info" }[tipo] || "");
     el.setAttribute("role", "status");
     el.textContent = texto;
     caixa.appendChild(el);
@@ -296,6 +315,7 @@
     if (t.matches("select[data-tema]")) {
       document.documentElement.dataset.theme = t.value;
       document.cookie = "invest_tema=" + encodeURIComponent(t.value) + "; path=/; max-age=31536000; samesite=lax" + (location.protocol === "https:" ? "; secure" : "");
+      try { localStorage.setItem("app-theme", t.value); } catch (_) { /* mesmo tema na SPA (prefs.js) */ }
       repintarGraficos();
       return;
     }
@@ -348,15 +368,140 @@
       if (nova) medirForca(nova);
     }
     if (e.target.closest("[data-alterna-lateral]")) alternarLateral();
-    const secao = e.target.closest("[data-abre-secao]");
-    if (secao && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) {
-      e.preventDefault();
-      abrirSecao(secao);
-    }
+
   });
 
+  // ── senha: SHOW/HIDE (todos os campos de senha) ────────────────────────────────────
+  document.addEventListener("click", (e) => {
+    const botao = e.target.closest("[data-mostra-senha]");
+    if (!botao) return;
+    const campo = botao.parentElement.querySelector("input");
+    const mostrar = campo.type === "password";
+    campo.type = mostrar ? "text" : "password";
+    botao.textContent = mostrar ? "HIDE" : "SHOW";
+  });
+
+  // ── sair / auto-lock (mesma preferência da SPA: localStorage "app-autolock-minutes") ──
+  function sair(porInatividade) {
+    if (!document.querySelector(".shell")) return;  // tela de acesso: nada a bloquear
+    const corpo = new URLSearchParams({ motivo: porInatividade ? "inatividade" : "" });
+    fetch("/logout", { method: "POST", headers: { "X-CSRF-Token": csrf() }, body: corpo, credentials: "same-origin", redirect: "follow" })
+      .then((r) => { location.href = r.redirected ? r.url : "/login?motivo=" + (porInatividade ? "inatividade" : "1"); })
+      .catch(() => { location.href = "/login?motivo=" + (porInatividade ? "inatividade" : "1"); });
+  }
+  function minutosAutoLock() {
+    let v = null;
+    try { v = localStorage.getItem("app-autolock-minutes"); } catch (_) { /* sem storage: padrão */ }
+    return v === null ? 5 : Number(v);
+  }
+  let timerLock = null;
+  function reiniciarLock() {
+    clearTimeout(timerLock);
+    const minutos = minutosAutoLock();
+    if (minutos > 0 && document.querySelector(".shell")) timerLock = setTimeout(() => sair(true), minutos * 60 * 1000);
+  }
+  ["mousemove", "keydown", "mousedown", "scroll", "touchstart"].forEach((evt) => window.addEventListener(evt, reiniciarLock, { passive: true }));
+  document.addEventListener("click", (e) => { if (e.target.closest("[data-sair]")) { e.preventDefault(); sair(false); } });
+
+  // ── copiar (COPY dos campos e cartões da galeria) ─────────────────────────
+  document.addEventListener("click", (e) => {
+    const alvo = e.target.closest("[data-copiar], [data-copiar-texto]");
+    if (!alvo) return;
+    const texto = alvo.dataset.copiarTexto ?? (document.querySelector(alvo.dataset.copiar) || {}).value ?? "";
+    if (!texto) { toast("Nada para copiar ainda.", "erro"); return; }
+    navigator.clipboard.writeText(texto).then(() => toast("Copiado!"), () => toast("Não foi possível copiar.", "erro"));
+  });
+
+  // ── filtro do menu lateral (como o "Filtrar módulos" da SPA) ─────────────
+  // O termo sobrevive à troca de página (a lateral é redesenhada), como o filtro da SPA.
+  let termoLateral = "";
+  function filtrarLateral() {
+    const campo = document.querySelector("[data-filtra-lateral]");
+    if (campo && campo.value !== termoLateral) campo.value = termoLateral;
+    const termo = termoLateral.trim().toLowerCase();
+    document.querySelectorAll(".lateral-item").forEach((a) => { a.hidden = termo !== "" && !a.textContent.toLowerCase().includes(termo); });
+  }
+  document.addEventListener("input", (e) => {
+    if (!e.target.matches("[data-filtra-lateral]")) return;
+    termoLateral = e.target.value;
+    filtrarLateral();
+  });
+
+  // ── largura da lateral (arrastar a alça), mesma preferência da SPA (js/prefs.js) ──────
+  const LARGURA_CHAVE = "app-sidebar-width", LARGURA_PADRAO = 240, LARGURA_MIN = 160, LARGURA_MAX = 550;
+  function aplicarLargura(px, salvar) {
+    const v = Math.min(LARGURA_MAX, Math.max(LARGURA_MIN, Math.round(px)));
+    document.documentElement.style.setProperty("--lateral-w", v + "px");
+    if (salvar) { try { localStorage.setItem(LARGURA_CHAVE, String(v)); } catch (_) { /* sem storage */ } }
+  }
+  try {
+    const salva = parseInt(localStorage.getItem(LARGURA_CHAVE), 10);
+    if (Number.isFinite(salva)) aplicarLargura(salva, false);
+  } catch (_) { /* sem storage: padrão */ }
+  let arrastandoLateral = false;
+  function moverAlca(x) {
+    const lateral = document.querySelector(".lateral");
+    if (arrastandoLateral && lateral) aplicarLargura(x - lateral.getBoundingClientRect().left, true);
+  }
+  function fimAlca() {
+    if (!arrastandoLateral) return;
+    arrastandoLateral = false;
+    document.querySelector(".lateral")?.classList.remove("redimensionando");
+    document.querySelector("[data-alca-lateral]")?.classList.remove("arrastando");
+    document.body.style.cursor = ""; document.body.style.userSelect = "";
+  }
+  function inicioAlca(e) {
+    const alca = e.target.closest && e.target.closest("[data-alca-lateral]");
+    if (!alca) return;
+    arrastandoLateral = true;
+    document.querySelector(".lateral")?.classList.add("redimensionando");
+    alca.classList.add("arrastando");
+    document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none";
+    e.preventDefault();
+  }
+  document.addEventListener("mousedown", inicioAlca);
+  document.addEventListener("touchstart", inicioAlca, { passive: false });
+  document.addEventListener("mousemove", (e) => moverAlca(e.clientX));
+  document.addEventListener("touchmove", (e) => { if (arrastandoLateral) { moverAlca(e.touches[0].clientX); e.preventDefault(); } }, { passive: false });
+  document.addEventListener("mouseup", fimAlca);
+  document.addEventListener("touchend", fimAlca);
+  document.addEventListener("dblclick", (e) => { if (e.target.closest("[data-alca-lateral]")) aplicarLargura(LARGURA_PADRAO, true); });
+
+  // ── configurações (tema + auto-lock), como o modal da SPA ─────────────────
+  document.addEventListener("click", (e) => {
+    const dialogo = document.getElementById("ajustes");
+    if (!dialogo) return;
+    if (e.target.closest("[data-abre-ajustes]")) {
+      dialogo.querySelector("[data-autolock]").value = String(minutosAutoLock());
+      dialogo.showModal();
+    } else if (e.target.closest("[data-fecha-ajustes]") || e.target === dialogo) {
+      dialogo.close();
+    }
+  });
+  document.addEventListener("change", (e) => {
+    if (!e.target.matches("select[data-autolock]")) return;
+    try { localStorage.setItem("app-autolock-minutes", e.target.value); } catch (_) { /* sem storage */ }
+    reiniciarLock();
+  });
+
+  // Mesmo comportamento da SPA (switchTab): clicar na seção já aberta (ícone ou aba da topbar)
+  // recolhe/mostra a lateral; ir para outra seção com a lateral recolhida reabre a lateral.
+  // Fase de captura: roda antes do hx-boost, que já mandaria a requisição com o cookie antigo.
+  document.addEventListener("click", (e) => {
+    // Ícone de seção com várias páginas: só troca a lista da lateral. Tem de ser na captura: o
+    // hx-boost escuta no próprio link e, na fase de bolha, a navegação já teria saído.
+    const secao = e.target.closest("[data-abre-secao]");
+    if (secao && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) {
+      e.preventDefault(); e.stopPropagation(); abrirSecao(secao); return;
+    }
+    const navAtivo = e.target.closest(".rail-item--on:not([data-abre-secao]):not([data-abre-ajustes])");
+    if (navAtivo) { e.preventDefault(); e.stopPropagation(); alternarLateral(); return; }
+    const navOutro = e.target.closest(".rail-item:not(.rail-item--on):not([data-abre-ajustes])");
+    if (navOutro && !lateralVisivel()) mostrarLateral(true);
+  }, true);
+
   // ── menu lateral ─────────────────────────────────────────────────────────
-  const ehTelaEstreita = () => window.matchMedia("(max-width: 1100px)").matches;
+  const ehTelaEstreita = () => window.matchMedia("(max-width: 760px)").matches;  // = @media da lateral em app.css
   function lateralVisivel() {
     const lateral = document.querySelector(".lateral");
     return ehTelaEstreita() ? lateral.classList.contains("aberta") : !document.querySelector(".shell").classList.contains("shell--recolhida");
@@ -386,6 +531,8 @@
     mostrarLateral(true);
   }
 
+
+  // Força da senha nova (o servidor mede e devolve o HTML já escapado).
   let temporizadorForca = null;
   function medirForca(input) {
     const caixa = input.closest("form, .acao");
@@ -457,6 +604,7 @@
   document.addEventListener("htmx:sendError", () => { restaurarMain(); toast("Sem conexão com o servidor.", "erro"); });
 
   function aoCarregar() {
+    reiniciarLock();
     if (window.htmx) htmx.onLoad(iniciar);
     else iniciar(document.body);
   }

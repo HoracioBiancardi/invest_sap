@@ -1,4 +1,4 @@
-"""Kit de UI server-side — o "Streamlit" do app FastAPI + HTMX.
+"""Kit de UI server-side — o "Streamlit" do app FastAPI + HTMX (= htmx_kit/ui.py do app_template).
 
 Cada página (`web/views/*.py`) recebe um `Pagina` e um `Ctx` e descreve a tela com a mesma
 semântica que tinha no Streamlit (`caption`, `columns`, `metric`, `table`, `tabs`,
@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import decimal
+import hashlib
 import itertools
 import json
 import re
@@ -36,6 +37,11 @@ import pandas as pd
 from markupsafe import Markup, escape
 
 from web import charts, fmt
+
+def versao_lista(itens: list[str]) -> str:
+    """Hash curto de uma lista grande de filtro (o navegador só rebaixa quando muda)."""
+    return hashlib.blake2b("\x1f".join(itens).encode("utf-8"), digest_size=8).hexdigest()
+
 
 # ── markdown mínimo ──────────────────────────────────────────────────────────
 
@@ -122,6 +128,7 @@ class Ctx:
         usuario: Usuário logado (dict do `app_db`).
         estado: Estado da sessão (filtros compartilhados entre páginas).
         slug: Slug da página.
+        auth: `AuthService` da requisição (tela Usuários; nos testes, o de banco em memória).
     """
 
     def __init__(
@@ -134,7 +141,9 @@ class Ctx:
         estado: dict[str, Any],
         slug: str,
         csrf: str = "",
+        auth: Any = None,
     ) -> None:
+        self.auth = auth
         self.caminho = caminho
         self.params = params
         self.form = form or {}
@@ -346,10 +355,11 @@ class Node:
     def container(self, classe: str = "") -> "Node":
         return self._filho("div", classe)
 
-    def card(self, rotulo: Optional[str] = None) -> "Node":
+    def card(self, rotulo: Optional[str] = None, icone_nome: Optional[str] = None) -> "Node":
         card = self._filho("section", "card")
         if rotulo:
-            card._add(Markup(f'<p class="card-rotulo">{escape(rotulo)}</p>'))
+            ic = icone(icone_nome) if icone_nome else ""
+            card._add(Markup(f'<p class="card-rotulo">{ic}{escape(rotulo)}</p>'))
         return card
 
     def expander(self, rotulo: str, aberto: bool = False) -> "Node":
@@ -408,9 +418,9 @@ class Node:
 
     def metrics(self, itens: Iterable[tuple]) -> None:
         """Linha de métricas: cada item = (rótulo, valor[, delta[, help]])."""
-        itens = list(itens)
-        for coluna, item in zip(self.columns(len(itens)), itens):
-            coluna.metric(*item)
+        linha = self._filho("div", "metricas-linha")  # = .metrics da SPA: reorganiza sozinha (mín. 180px)
+        for item in itens:
+            linha.metric(*item)
 
     def valor_por_moeda(self, df: pd.DataFrame, valor_col: str, moeda_col: str = "Moeda", prefixo: str = "") -> None:
         """1 métrica por moeda, BRL primeiro (porte de `ui_theme.render_valor_por_moeda`)."""
@@ -548,7 +558,8 @@ class Node:
         # ativaria o 1º checkbox/radio ao clicar no rótulo.
         ajuda = Markup(f'<span class="ajuda" tabindex="0" data-tip="{escape(help)}">{icone("help")}</span>') if help else ""
         tag = "div" if grupo else "label"
-        self._add(Markup(f'<{tag} class="campo"><span class="campo-rotulo">{md_inline(rotulo)}{ajuda}</span>{controle}</{tag}>'))
+        cabeca = Markup(f'<span class="campo-rotulo">{md_inline(rotulo)}{ajuda}</span>') if rotulo else Markup("")  # "" = sem rótulo
+        self._add(Markup(f'<{tag} class="campo">{cabeca}{controle}</{tag}>'))
 
     def _form_attr(self) -> Markup:
         # Dentro de uma ação (POST), o input não pertence ao form de filtros (não vai pra URL).
@@ -587,9 +598,7 @@ class Node:
             partes.append(Markup(f'<option value="{escape(valor_de(o))}"{sel}>{escape(formatar(o))}</option>'))
         dim_attr = ""
         if dim:
-            from web.dims import versao  # import tardio: dims importa as views
-
-            dim_attr = Markup(f' data-dim="{escape(dim)}" data-dim-ver="{versao([valor_de(o) for o in opcoes])}"')
+            dim_attr = Markup(f' data-dim="{escape(dim)}" data-dim-ver="{versao_lista([valor_de(o) for o in opcoes])}"')
         self._campo(
             rotulo,
             Markup(f'<select name="{escape(chave)}" {self._form_attr()}{dim_attr}>{Markup("").join(partes)}</select>'),
@@ -653,10 +662,22 @@ class Node:
         )
         return valor
 
-    def text_area(self, rotulo: str, chave: str, default: str = "", help: Optional[str] = None) -> str:
+    def text_area(
+        self, rotulo: str, chave: str, default: str = "", help: Optional[str] = None, linhas: int = 3,
+        placeholder: str = "", somente_leitura: bool = False, codigo: bool = False,
+    ) -> str:
         enviados = self._valor_widget(chave, False)
         valor = enviados[-1] if enviados else default
-        self._campo(rotulo, Markup(f'<textarea name="{escape(chave)}" rows="3" {self._form_attr()}>{escape(valor)}</textarea>'), help)
+        extra = Markup(" readonly") if somente_leitura else Markup("")
+        classe = Markup(' class="codigo-campo"') if codigo else Markup("")
+        self._campo(
+            rotulo,
+            Markup(
+                f'<textarea name="{escape(chave)}" rows="{int(linhas)}" placeholder="{escape(placeholder)}"{classe}{extra} '
+                f'{self._form_attr()}>{escape(valor)}</textarea>'
+            ),
+            help,
+        )
         return valor
 
     def number_input(self, rotulo: str, chave: str, minimo: int, maximo: int, default: int, passo: int = 1, help: Optional[str] = None) -> int:

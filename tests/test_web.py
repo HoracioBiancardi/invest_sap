@@ -362,3 +362,29 @@ def test_csv_de_ajustes_neutraliza_formula():
     from web.views.admin_dados import _csv_seguro
 
     assert "'=HYPERLINK" in _csv_seguro([{"a": "=HYPERLINK(1)"}])
+
+
+def test_sair_mostra_o_motivo_no_login(cliente):
+    _login(cliente)
+    tok = _csrf(cliente)
+    r = cliente.post("/logout", data={"_csrf": tok, "motivo": "inatividade"}, follow_redirects=False)
+    assert r.headers["location"] == "/login?motivo=inatividade"
+    assert "Sessão bloqueada por inatividade" in cliente.get(r.headers["location"]).text
+    _login(cliente)
+    r = cliente.post("/logout", data={"_csrf": _csrf(cliente)}, follow_redirects=False)
+    assert "Você saiu." in cliente.get(r.headers["location"]).text
+
+
+def test_post_de_outra_origem_recusado_mesmo_com_token(cliente):
+    # Outra porta/subdomínio do mesmo domínio é o mesmo "site": o SameSite não barra.
+    _login(cliente)
+    tok = _csrf(cliente)
+    r = cliente.post("/conta/senha", data={"_csrf": tok, "_acao": "minha_senha"}, headers={"Sec-Fetch-Site": "same-site"})
+    assert r.status_code == 403
+
+
+def test_casca_do_kit_com_ajustes_e_sem_seletor_de_tema_no_topo(cliente):
+    _login(cliente)
+    html = cliente.get("/p/admin").text
+    assert 'id="ajustes"' in html and "data-abre-ajustes" in html and "data-filtra-lateral" in html
+    assert 'class="tema-sel"' not in html and "data-sair" in html

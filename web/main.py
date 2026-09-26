@@ -158,6 +158,10 @@ def _sessao(request: Request) -> tuple[Optional[dict], Optional[dict]]:
 
 
 def _csrf_ok(request: Request, sessao: dict, form: Optional[dict[str, list[str]]] = None) -> bool:
+    # Reforço (= htmx_kit do app_template): o navegador marca pedidos de outra origem; outra porta
+    # ou subdomínio do mesmo domínio é o mesmo "site" e passa pelo SameSite=Strict do cookie.
+    if request.headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none"):
+        return False
     enviado = request.headers.get("X-CSRF-Token") or ((form or {}).get("_csrf") or [""])[-1]
     return bool(enviado) and secrets.compare_digest(enviado, sessao["csrf"])
 
@@ -393,13 +397,19 @@ def _proximo_seguro(proximo: str) -> str:
     return proximo if proximo.startswith("/") and not proximo.startswith("//") and "\\" not in proximo else "/p/home"
 
 
+_AVISOS_LOGIN = {"saiu": "Você saiu.", "inatividade": "Sessão bloqueada por inatividade. Entre novamente."}
+
+
 @app.get("/login")
-def login_form(request: Request, next: str = "/p/home") -> Response:
+def login_form(request: Request, next: str = "/p/home", motivo: str = "") -> Response:
     sessao, usuario = _sessao(request)
     if sessao and usuario:
         return RedirectResponse(_proximo_seguro(next), status_code=303)
     token = secrets.token_urlsafe(24)
-    resposta = _portal(request, "login.html", {"csrf_login": token, "proximo": _proximo_seguro(next), "erro": None})
+    resposta = _portal(
+        request, "login.html",
+        {"csrf_login": token, "proximo": _proximo_seguro(next), "erro": None, "aviso": _AVISOS_LOGIN.get(motivo)},
+    )
     _cookie(resposta, COOKIE_CSRF_LOGIN, token, max_age=3600)
     return resposta
 
@@ -436,7 +446,9 @@ async def logout(request: Request) -> Response:
     if sessao and _csrf_ok(request, sessao, form):
         auth.logout(sessao, usuario)
         _ESTADOS.pop(sessao["token_hash"], None)
-    resposta = _redirecionar(request, "/login")
+    # Botão Sair ou bloqueio por inatividade (app.js): a tela de login mostra o motivo.
+    motivo = "inatividade" if (form.get("motivo") or [""])[-1] == "inatividade" else "saiu"
+    resposta = _redirecionar(request, f"/login?motivo={motivo}")
     resposta.delete_cookie(auth.COOKIE, path="/")
     # Apaga IndexedDB/localStorage (listas de filtro) do navegador.
     resposta.headers["Clear-Site-Data"] = '"storage"'

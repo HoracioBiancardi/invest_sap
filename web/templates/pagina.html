@@ -10,10 +10,26 @@
 <body hx-boost="true" hx-headers='{"X-CSRF-Token": "{{ csrf }}"}'>
 <a class="pular" href="#main">Pular para o conteúdo</a>
 <div id="progresso" class="progresso" aria-hidden="true"></div>
+{# Casca do htmx_kit do app_template (= SPA): topbar de largura total com a marca, activity bar
+   com rótulos e Ajustes, lateral com cabeçalho, filtro, rodapé e largura arrastável. #}
+<header class="topo">
+  <div class="topo-marca">
+    <button type="button" class="topo-menu" data-alterna-lateral aria-label="Mostrar/esconder o menu lateral" title="Mostrar/esconder o menu lateral">{{ icone("menu") }}</button>
+    <a class="marca-icone marca-icone--img" href="/p/home" title="Início" aria-label="Início"><img src="/static/blau_simbolo.png?v={{ v }}" alt=""></a>
+    <div class="marca-texto">
+      <span class="marca-nome">HOPPER</span>
+      <span class="marca-tagline">DataPlataform · Blau</span>
+    </div>
+  </div>
+  <div class="topo-acoes">
+    <span class="usuario-selo" title="Usuário logado ({{ usuario.role }})">{{ icone("person") }}{{ usuario.username }}</span>
+    {% if cofre_liberado %}<span class="conexao">online</span>{% else %}<span class="conexao conexao--off">cofre bloqueado</span>{% endif %}
+    <button type="button" class="botao botao--topo" data-sair title="Sair (encerrar a sessão)">{{ icone("logout") }}Sair</button>
+  </div>
+</header>
 <div class="shell{% if lateral_recolhida %} shell--recolhida{% endif %}">
   {% set secao_menu = secao_atual if secao_atual is not none else "" %}
   <nav class="rail" aria-label="Seções">
-    <a class="rail-marca" href="/p/home" title="Início"><img src="/static/blau_simbolo.png?v={{ v }}" alt="Blau"></a>
     {% for secao, paginas in menu.items() %}
       {% set ic, titulo_secao, curto = SECOES[secao] %}
       {# Seção com várias páginas: o clique só troca a lista do menu lateral (app.js), sem ir ao servidor. #}
@@ -21,9 +37,13 @@
         {{ icone(ic) }}<span>{{ curto }}</span>
       </a>
     {% endfor %}
+    <button type="button" class="rail-item rail-ajustes" data-abre-ajustes title="Configurações">{{ icone("settings") }}<span>Ajustes</span></button>
   </nav>
   <aside class="lateral" aria-label="Páginas da seção">
-    <img class="lateral-logo" src="/static/blau_logo.png?v={{ v }}" alt="Blau Farmacêutica">
+    <div class="lateral-cabecalho"><span>Navegador</span>
+      <button type="button" class="lateral-fechar" data-alterna-lateral title="Recolher Sidebar" aria-label="Recolher o menu lateral">{{ icone("close") }}</button></div>
+    <div class="lateral-busca"><input type="text" placeholder="Filtrar páginas…" aria-label="Filtrar páginas" data-filtra-lateral></div>
+    <div class="lateral-arvore">
     {% for secao, paginas in menu.items() %}
     <div class="lateral-grupo" data-secao="{{ loop.index0 }}"{% if secao != secao_menu %} hidden{% endif %}>
       <p class="lateral-secao">{{ SECOES[secao][1] }}</p>
@@ -34,30 +54,34 @@
       {% endfor %}
     </div>
     {% endfor %}
+    </div>
+    <div class="lateral-rodape"><img class="lateral-logo" src="/static/blau_logo.png?v={{ v }}" alt="Blau Farmacêutica"></div>
   </aside>
+  <div class="lateral-alca" data-alca-lateral title="Arraste para redimensionar · Duplo-clique para largura padrão"></div>
   <div class="area">
-    <header class="topo">
-      <button type="button" class="topo-menu" data-alterna-lateral aria-label="Mostrar/esconder o menu lateral" title="Mostrar/esconder o menu lateral">{{ icone("menu") }}</button>
-      <div class="topo-marca">HOPPER <span>· DataPlataform</span></div>
-      <div class="topo-acoes">
-        {% if cofre_liberado %}<span class="conexao">online</span>{% else %}<span class="conexao conexao--off">cofre bloqueado</span>{% endif %}
-        <span class="ola">Olá, {{ usuario.username }}</span>
-        {% if usuario.role == "admin" %}<a class="botao botao--fantasma" href="/p/admin" title="Área administrativa">{{ icone("admin_panel_settings") }}<span>Admin</span></a>{% endif %}
-        <label class="tema-sel" title="Tema da interface">{{ icone("palette") }}
-          <select data-tema aria-label="Tema da interface">
-            {% for chave, rotulo in TEMAS.items() %}<option value="{{ chave }}"{% if chave == tema %} selected{% endif %}>{{ rotulo }}</option>{% endfor %}
-          </select>
-        </label>
-        <a class="botao botao--fantasma" href="/conta/senha" title="Trocar minha senha">{{ icone("key") }}<span>Minha senha</span></a>
-        <form method="post" action="/logout" class="sair">
-          <input type="hidden" name="_csrf" value="{{ csrf }}">
-          <button type="submit" class="botao botao--fantasma" title="{{ usuario.username }} ({{ usuario.role }}) — sair">{{ icone("logout") }}<span>Sair</span></button>
-        </form>
-      </div>
-    </header>
     {% include "_main.html" %}
   </div>
 </div>
+{# Mesmo modal de Configurações da SPA/kit: tema, bloqueio por inatividade e a própria senha. #}
+<dialog id="ajustes" class="modal-kit" aria-labelledby="ajustes-titulo">
+  <div class="modal-kit-cabecalho">
+    <h2 id="ajustes-titulo">Configurações</h2>
+    <button type="button" class="modal-kit-fechar" data-fecha-ajustes aria-label="Fechar">X</button>
+  </div>
+  <label class="campo"><span class="campo-rotulo portal-rotulo">Tema da interface</span>
+    <select data-tema aria-label="Tema da interface">
+      {% for chave, rotulo in TEMAS.items() %}<option value="{{ chave }}"{% if chave == tema %} selected{% endif %}>{{ rotulo }}</option>{% endfor %}
+    </select>
+  </label>
+  <label class="campo"><span class="campo-rotulo portal-rotulo">Bloqueio automático por inatividade</span>
+    <select data-autolock aria-label="Bloqueio automático por inatividade">
+      <option value="0">Desativado</option><option value="1">1 minuto</option><option value="5">5 minutos</option>
+      <option value="15">15 minutos</option><option value="30">30 minutos</option>
+    </select>
+  </label>
+  <a class="botao botao--largo" href="/conta/senha" data-fecha-ajustes>{{ icone("key") }}Alterar minha senha</a>
+  <button type="button" class="botao botao--primario botao--largo" data-fecha-ajustes>Fechar</button>
+</dialog>
 <div id="toasts" class="toasts" aria-live="polite"></div>
 </body>
 </html>

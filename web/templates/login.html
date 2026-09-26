@@ -1,6 +1,9 @@
 {% extends "_portal.html" %}
 {% block subtitulo %}Portal de Acesso · DataPlataform{% endblock %}
 {% block corpo %}
+{# Mensagens no topo do card (= tela de acesso do app_template). #}
+  {% if erro %}<div class="alerta alerta--erro portal-msg" role="alert">{{ icone("error") }}<div>{{ erro }}</div></div>{% endif %}
+  {% if aviso and not erro %}<div class="alerta alerta--ok portal-msg" role="status">{{ icone("check_circle") }}<div>{{ aviso }}</div></div>{% endif %}
 <form method="post" action="/login" class="portal-form">
   <input type="hidden" name="_csrf" value="{{ csrf_login }}">
   <input type="hidden" name="next" value="{{ proximo }}">
@@ -10,8 +13,7 @@
   <label class="campo"><span class="campo-rotulo">Senha</span>
     <input type="password" name="senha" autocomplete="current-password" placeholder="Digite sua senha…" required>
   </label>
-  {% if erro %}<div class="alerta alerta--erro" role="alert">{{ icone("error") }}<div>{{ erro }}</div></div>{% endif %}
   <p class="caption">Sessão com bloqueio automático por inatividade.</p>
-  <button type="submit" class="botao botao--primario botao--largo">Entrar</button>
+  <button type="submit" class="botao botao--primario botao--largo">Entrar / Desbloquear</button>
 </form>
 {% endblock %}

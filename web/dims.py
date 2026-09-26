@@ -11,7 +11,6 @@ Só nomes de dimensão (sem valor financeiro). O IndexedDB é apagado no logout
 
 from __future__ import annotations
 
-import hashlib
 from typing import Callable
 
 from scripts.query_faturamento_comercial import DIMENSOES_FATURAMENTO
@@ -36,8 +35,8 @@ FONTES: dict[str, Callable[[], list[str]]] = {f"com:{d}": _comercial(d) for d in
 FONTES["vendedores"] = _vendedores
 
 
-def versao(itens: list[str]) -> str:
-    return hashlib.blake2b("\x1f".join(itens).encode("utf-8"), digest_size=8).hexdigest()
+# O mesmo hash que o ui.py põe em data-dim-ver (o navegador só rebaixa a lista quando muda).
+from web.ui import versao_lista as versao  # noqa: E402
 
 
 def carregar(nome: str) -> tuple[str, list[str]]:

@@ -42,7 +42,12 @@ uv run pytest -v
   **1 processo só** (cofre, lockout e cache em memória).
 - **`scripts/`**: lógica de consulta/negócio compartilhada entre páginas
   (`db.py`, `query_vendas_sap.py`, `ddic_lookup.py`, `trace_pedido.py`, etc.).
-- Sem app_template — o app web é arquitetura própria (kit `web/ui.py`), não o template FastAPI.
+- **Casca e kit = `htmx_kit` do app_template** (que nasceu daqui): `web/static/app.css`, `app.js` e
+  `web/ui.py` são cópias do kit, com as rotas/cookies daqui (`/login`, `/logout`, `invest_*`), a
+  marca Blau/HOPPER e a medição de força de senha. Topbar (☰, marca, usuário, online/cofre
+  bloqueado, Sair), activity bar com Ajustes (tema, bloqueio por inatividade, "Alterar minha
+  senha"), lateral por seção com filtro e largura arrastável, SHOW em todo campo de senha, motivo
+  da saída no login (`/login?motivo=`). Ao mudar o kit no app_template, traga a mudança para cá.
 
 ---
 
