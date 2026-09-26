@@ -649,15 +649,18 @@ class Node:
         tipo: str = "text",
         autocomplete: str = "off",
         compartilhado: bool = False,
+        forca: bool = False,
     ) -> str:
+        """`forca=True`: medidor de força da senha logo abaixo (app.js, regra de password_policy)."""
         enviados = self._valor_widget(chave, compartilhado)
         valor = enviados[-1] if enviados else default
         mostrar = "" if tipo == "password" else valor
+        extra = Markup(" data-forca") if forca else Markup("")
         self._campo(
             rotulo,
             Markup(
                 f'<input type="{escape(tipo)}" name="{escape(chave)}" value="{escape(mostrar)}" '
-                f'placeholder="{escape(placeholder)}" autocomplete="{escape(autocomplete)}" {self._form_attr()}>'
+                f'placeholder="{escape(placeholder)}" autocomplete="{escape(autocomplete)}"{extra} {self._form_attr()}>'
             ),
             help,
         )
