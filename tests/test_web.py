@@ -395,3 +395,29 @@ def test_painel_admin_saiu_e_link_antigo_vai_para_usuarios(cliente):
     r = cliente.get("/p/admin", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/p/admin-usuarios"
     assert 'href="/p/admin"' not in cliente.get("/p/admin-usuarios").text
+
+
+def test_rajada_de_logins_confere_no_maximo_o_limite(monkeypatch):
+    """Antes, o bloqueio era checado antes do hash e a falha contada depois: a rajada passava toda."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    app_db.criar_usuario("alvo", "Senha-Certa-2026!", role="leitor", must_change_password=False)
+    conferidas = []
+    original = app_db.verify_password
+
+    def espiao(senha, hash_):
+        conferidas.append(senha)
+        return original(senha, hash_)
+
+    monkeypatch.setattr(app_db, "verify_password", espiao)
+    with ThreadPoolExecutor(20) as pool:
+        list(pool.map(lambda i: web_auth.login("alvo", f"errada-{i}"), range(40)))
+    assert len(conferidas) <= web_auth.MAX_FALHAS_USUARIO
+
+
+def test_login_certo_nao_gasta_o_limite_global():
+    """A reserva conta no global, mas o login certo devolve: usuários legítimos não bloqueiam todos."""
+    app_db.criar_usuario("alvo", "Senha-Certa-2026!", role="leitor", must_change_password=False)
+    for _ in range(web_auth.MAX_FALHAS_GLOBAL + 5):
+        token, erro = web_auth.login("alvo", "Senha-Certa-2026!")
+        assert token and not erro

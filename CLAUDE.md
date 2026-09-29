@@ -55,4 +55,9 @@ uv run pytest -v
 
 @~/.claude/security-review-checklist.md
 
+Decisões da 2ª rodada (2026-09-29):
+- **Lockout reserva a tentativa antes do hash** (`web/auth.py::reservar_tentativa`); o login certo
+  devolve a reserva ao contador global. O desbloqueio do cofre (`CredentialVault._decifrar`) e a
+  troca de senha logada seguem o mesmo esquema.
+
 Log histórico de achados por projeto em `app_template/SECURITY_CHECKLIST.md`.

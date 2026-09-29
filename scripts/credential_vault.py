@@ -208,17 +208,24 @@ class CredentialVault:
         Raises:
             CofreError: Cofre inexistente, bloqueio temporário ativo ou senha mestra errada.
         """
-        restante = cls.segundos_bloqueado()
-        if restante:
-            raise CofreError(f"Muitas tentativas. Aguarde {restante}s.")
+        # A tentativa entra na lista ANTES de decifrar (PBKDF2 lento): com a contagem só depois,
+        # uma rajada em paralelo passava toda pela checagem e testava dezenas de senhas mestras.
+        agora = time.time()
+        with cls._lock:
+            cls._falhas[:] = [t for t in cls._falhas if agora - t < cls.BLOQUEIO_SEG]
+            if len(cls._falhas) >= cls.MAX_FALHAS:
+                restante = int(cls.BLOQUEIO_SEG - (agora - cls._falhas[0])) + 1
+                raise CofreError(f"Muitas tentativas. Aguarde {restante}s.")
+            cls._falhas.append(agora)
         blob = cls._ler_blob()
         if blob is None:
+            with cls._lock:
+                if agora in cls._falhas:
+                    cls._falhas.remove(agora)
             raise CofreError("O cofre ainda não foi configurado.")
         try:
             dados = json.loads(CryptoVault.decifrar(blob, senha_mestra))
         except InvalidToken as exc:
-            with cls._lock:
-                cls._falhas.append(time.time())
             raise CofreError("Senha mestra incorreta.") from exc
         with cls._lock:
             cls._falhas.clear()

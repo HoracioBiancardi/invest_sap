@@ -108,3 +108,29 @@ def test_trocar_credencial_descarta_engine_cacheada():
     e2 = db.get_sqlserver_engine("GOLD")
     assert e1 is not e2
     assert "novo.host" in str(e2.url.query)
+
+
+def test_rajada_de_senhas_mestras_confere_no_maximo_o_limite(monkeypatch):
+    """Antes, a falha só entrava na lista depois de decifrar: uma rajada testava dezenas de senhas."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    CredentialVault.criar(CREDS, MESTRA)
+    CredentialVault.bloquear()
+    conferidas = []
+    original = CryptoVault.decifrar
+
+    def espiao(blob, senha):
+        conferidas.append(senha)
+        return original(blob, senha)
+
+    monkeypatch.setattr(CryptoVault, "decifrar", staticmethod(espiao))
+
+    def tentar(i):
+        try:
+            CredentialVault.desbloquear(f"errada-{i}")
+        except CofreError:
+            pass
+
+    with ThreadPoolExecutor(20) as pool:
+        list(pool.map(tentar, range(40)))
+    assert len(conferidas) <= CredentialVault.MAX_FALHAS

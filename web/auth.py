@@ -81,19 +81,47 @@ def segundos_bloqueado(usuario: str) -> int:
         )
 
 
-def registrar_falha(usuario: str) -> None:
+_LIMITES = ((MAX_FALHAS_USUARIO, False), (MAX_FALHAS_GLOBAL, True))
+
+
+def reservar_tentativa(usuario: str) -> int:
+    """Conta a tentativa ANTES de conferir a senha; devolve os segundos de bloqueio (0 = pode tentar).
+
+    Se o bloqueio fosse checado antes e a falha contada só depois do hash, uma rajada de
+    requisições em paralelo passaria toda pela checagem e testaria dezenas de senhas antes de
+    bloquear. Reservando antes, no máximo `MAX_FALHAS_USUARIO` senhas por janela.
+    """
+    agora = time.time()
     with _lock:
-        for chave, limite in ((usuario.lower(), MAX_FALHAS_USUARIO), ("*", MAX_FALHAS_GLOBAL)):
+        chaves = (usuario.lower(), "*")
+        restante = max((int(_lockouts.get(c, {}).get("ate", 0) - agora) + 1 for c in chaves), default=0)
+        if restante > 0:
+            return restante
+        excedeu = False
+        for chave, (limite, _) in zip(chaves, _LIMITES):
             estado = _lockouts.setdefault(chave, {"falhas": 0, "ate": 0.0})
             estado["falhas"] += 1
+            excedeu = excedeu or estado["falhas"] > limite
+        return LOCKOUT_SEG if excedeu else 0  # outra requisição em paralelo já gastou as tentativas
+
+
+def registrar_falha(usuario: str) -> None:
+    """Senha errada numa tentativa já reservada: bloqueia quem chegou ao limite."""
+    with _lock:
+        for chave, (limite, _) in zip((usuario.lower(), "*"), _LIMITES):
+            estado = _lockouts.setdefault(chave, {"falhas": 0, "ate": 0.0})
             if estado["falhas"] >= limite:
                 estado["falhas"] = 0
                 estado["ate"] = time.time() + LOCKOUT_SEG
 
 
 def limpar_falhas(usuario: str) -> None:
+    """Login certo: zera o usuário e devolve ao contador global a tentativa reservada."""
     with _lock:
         _lockouts.pop(usuario.lower(), None)
+        global_ = _lockouts.get("*")
+        if global_ and global_["falhas"] > 0:
+            global_["falhas"] -= 1
 
 
 def autenticar(usuario: str, senha: str) -> Optional[dict[str, Any]]:
@@ -112,7 +140,7 @@ def login(usuario: str, senha: str) -> tuple[Optional[str], Optional[str]]:
         (token de sessão, None) em caso de sucesso; (None, mensagem de erro) senão.
     """
     usuario = usuario[:64]
-    restante = segundos_bloqueado(usuario)
+    restante = reservar_tentativa(usuario)
     if restante > 0:
         return None, f"Muitas tentativas. Aguarde {restante}s."
     user = autenticar(usuario, senha)
@@ -166,11 +194,19 @@ def trocar_senha_obrigatoria(user: dict[str, Any], nova: str, conf: str) -> Opti
 
 
 def trocar_minha_senha(user: dict[str, Any], atual: str, nova: str, conf: str) -> Optional[str]:
-    """Troca voluntária (exige a senha atual). Devolve mensagem de erro ou None."""
+    """Troca voluntária (exige a senha atual). Devolve mensagem de erro ou None.
+
+    A senha atual conta tentativa como o login: sem isso, quem pegasse uma sessão aberta
+    poderia adivinhar a senha à vontade por aqui e tomar a conta de vez."""
+    restante = reservar_tentativa(user["username"])
+    if restante > 0:
+        return f"Muitas tentativas. Aguarde {restante}s."
     fresco = app_db.get_user_by_id(user["id"])
     if not fresco or not app_db.verify_password(atual, fresco["password_hash"]):
+        registrar_falha(user["username"])
         app_db.audit(user["username"], "senha_troca_falhou")
         return "Senha atual incorreta."
+    limpar_falhas(user["username"])
     if nova != conf:
         return "As senhas não conferem."
     if nova == atual:
