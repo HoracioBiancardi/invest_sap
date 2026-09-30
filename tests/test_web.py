@@ -179,10 +179,9 @@ def test_configuracoes_salvam(cliente):
     csrf = _csrf(cliente)
     cliente.post(
         "/p/admin-configuracoes",
-        data={"_action": "salvar_config", "tema": "blau", "idle": "45", "zumbi": "400", "excluir_intercompany": "0"},
+        data={"_action": "salvar_config", "idle": "45", "zumbi": "400", "excluir_intercompany": "0"},
         headers={"X-CSRF-Token": csrf},
     )
-    assert app_db.get_setting("default_theme") == "blau"
     assert app_db.get_setting("idle_minutes") == 45
     assert app_db.get_setting("excluir_intercompany") is False
 

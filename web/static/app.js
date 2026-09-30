@@ -237,12 +237,6 @@
     redimensionar.observe(el);
   }
 
-  function repintarGraficos() {
-    document.querySelectorAll(".grafico").forEach((el) => {
-      if (el._grafico && el._spec) el._grafico.setOption(montarOpcaoGrafico(el._spec), true);
-    });
-  }
-
   // ── listas grandes (IndexedDB) ────────────────────────────────────────────
   let bancoPromessa = null;
   function banco() {
@@ -330,13 +324,6 @@
   // ── eventos globais ──────────────────────────────────────────────────────
   document.addEventListener("change", (e) => {
     const t = e.target;
-    if (t.matches("select[data-tema]")) {
-      document.documentElement.dataset.theme = t.value;
-      document.cookie = "invest_tema=" + encodeURIComponent(t.value) + "; path=/; max-age=31536000; samesite=lax" + (location.protocol === "https:" ? "; secure" : "");
-      try { localStorage.setItem("app-theme", t.value); } catch (_) { /* mesmo tema na SPA (prefs.js) */ }
-      repintarGraficos();
-      return;
-    }
     if (!t.matches("[data-w]")) return;
     const multi = t.closest(".multi");
     if (multi) { multi.dataset.sujo = "1"; return; }
@@ -485,7 +472,7 @@
   document.addEventListener("touchend", fimAlca);
   document.addEventListener("dblclick", (e) => { if (e.target.closest("[data-alca-lateral]")) aplicarLargura(LARGURA_PADRAO, true); });
 
-  // ── configurações (tema + auto-lock), como o modal da SPA ─────────────────
+  // ── configurações (auto-lock), como o modal da SPA ─────────────────
   document.addEventListener("click", (e) => {
     const dialogo = document.getElementById("ajustes");
     if (!dialogo) return;

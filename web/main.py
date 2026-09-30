@@ -41,7 +41,6 @@ from scripts.db import DatabaseConnectionError
 from scripts.password_service import PasswordService
 from web import auth, dims
 from web.cache import Aquecedor
-from web.temas import TEMAS, tema_padrao
 from web.ui import Ctx, Pagina, icone
 from web.views import POR_SLUG, SECOES, InfoPagina, menu, sementes_de_aquecimento
 
@@ -50,7 +49,6 @@ logger = logging.getLogger("web")
 RAIZ = Path(__file__).resolve().parent
 COOKIE_SEGURO = os.environ.get("APP_COOKIE_SECURE", "1") != "0"
 COOKIE_CSRF_LOGIN = "invest_csrf_login"
-COOKIE_TEMA = "invest_tema"
 
 CredentialVault.interativo = False
 
@@ -80,7 +78,7 @@ def _versao_estaticos() -> str:
 
 
 VERSAO_ESTATICOS = _versao_estaticos()
-templates.env.globals.update(v=VERSAO_ESTATICOS, icone=icone, TEMAS=TEMAS, SECOES=SECOES)
+templates.env.globals.update(v=VERSAO_ESTATICOS, icone=icone, SECOES=SECOES)
 
 
 class EstaticosImutaveis(StaticFiles):
@@ -148,11 +146,6 @@ def _cookie(resposta: Response, nome: str, valor: str, *, max_age: Optional[int]
     )
 
 
-def _tema(request: Request) -> str:
-    escolhido = request.cookies.get(COOKIE_TEMA, "")
-    return escolhido if escolhido in TEMAS else tema_padrao()
-
-
 def _sessao(request: Request) -> tuple[Optional[dict], Optional[dict]]:
     return auth.sessao_atual(request.cookies.get(auth.COOKIE))
 
@@ -192,7 +185,6 @@ def _contexto_shell(request: Request, usuario: dict, sessao: dict, pagina: Optio
         "request": request,
         "usuario": usuario,
         "csrf": sessao["csrf"],
-        "tema": _tema(request),
         "menu": menu(usuario["role"]),
         "pagina_atual": pagina,
         "secao_atual": pagina.secao if pagina else None,
@@ -395,7 +387,7 @@ def api_dim(request: Request, nome: str) -> Response:
 
 
 def _portal(request: Request, nome: str, contexto: dict[str, Any], status: int = 200) -> Response:
-    contexto = {"request": request, "tema": _tema(request), **contexto}
+    contexto = {"request": request, **contexto}
     return templates.TemplateResponse(request, nome, contexto, status_code=status)
 
 

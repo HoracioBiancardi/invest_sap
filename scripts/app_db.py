@@ -264,7 +264,6 @@ def definir_senha(user_id: int, senha: str, *, must_change_password: bool) -> No
 # ── configurações ────────────────────────────────────────────────────────────
 
 DEFAULTS_CONFIG: dict[str, Any] = {
-    "default_theme": "corporate",
     "idle_minutes": 30,
     "limiar_zumbi_dias": 365,
     "excluir_estoque_internacional": False,

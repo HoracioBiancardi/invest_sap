@@ -1,0 +1,86 @@
+/* =====================================================================
+   DESIGN SYSTEM BLAU — tokens (fonte única: app_template/design_system/blau/)
+   Tema claro fiel ao site blau.com. Copie este arquivo SEM editar para cada
+   projeto e carregue-o DEPOIS do CSS da casca; ele só define variáveis, sem
+   nenhum seletor de componente. Ative com <body class="theme-blau"> (casca SPA)
+   ou <html data-theme="blau"> (htmx_kit) — vale igual para projeto só-Blau e
+   para projeto com seletor de tema. Os ajustes por componente ficam no
+   adaptador da casca: blau-spa.css (frontend SPA) ou blau-htmx.css (htmx_kit).
+
+   Fonte das cores/tipografia: CSS público do site (static/dist/main.*.css):
+     --primary #36B3E3 (azul-céu), --secondary #011689 (azul-marinho),
+     acento #E3010F (vermelho), tint #D3EEF9, fonte PT Sans, cinzas Bootstrap.
+
+   Regra de uso das cores (contraste WCAG medido sobre branco):
+     azul-marinho #011689  14.2:1 → ações (botão primário), títulos, texto ativo
+     azul-céu     #36B3E3   2.4:1 → só decorativo: faixas, anel de foco, destaque
+                                    de item ativo, fundos em tint. Nunca texto.
+     azul-céu escuro #1678A0 5.0:1 → quando o azul-céu precisa virar texto/link
+     vermelho     #E3010F   4.9:1 → erro/perigo (é o vermelho da marca)
+
+   Fonte: carregue PT Sans no <head> (Google Fonts: family=PT+Sans:wght@400;700).
+   ===================================================================== */
+
+/* ── Marca (em :root para uso pontual em qualquer tema) ── */
+:root {
+  --blau-navy:      #011689;
+  --blau-navy-700:  #0a2aa8;
+  --blau-sky:       #36b3e3;
+  --blau-sky-text:  #1678a0;
+  --blau-sky-soft:  #d3eef9;
+  --blau-red:       #e3010f;
+  --blau-font:      'PT Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* ── Semânticos (os nomes que as duas cascas leem) ── */
+.theme-blau, [data-theme="blau"] {
+  color-scheme: light;
+
+  --bg:              #f3f6fa;
+  --surface:         #ffffff;
+  --surface-alt:     #eaf0f6;
+  --surface-hover:   #e1ecf7;
+
+  --border:          #dee2e6;
+  --border-muted:    #e9ecef;
+  --border-bright:   #ced4da;
+
+  --primary:         var(--blau-navy);
+  --primary-hover:   var(--blau-navy-700);
+  --primary-dim:     rgba(54, 179, 227, 0.14);
+  --primary-glow:    rgba(54, 179, 227, 0.30);
+  --glow-ring:       0 0 0 3px rgba(54, 179, 227, 0.35);
+  --on-primary:      #ffffff;
+
+  --text:            #212529;
+  --text-muted:      #495057;
+  --text-subtle:     #6c757d;
+
+  --success:         #1e7e34;
+  --warn:            #9a6700;
+  --danger:          var(--blau-red);
+  --danger-dim:      rgba(227, 1, 15, 0.08);
+  --info:            var(--blau-sky-text);
+
+  --shadow-sm:       0 1px 2px rgba(1, 22, 137, .05), 0 1px 3px rgba(16, 24, 40, .06);
+  --shadow-md:       0 4px 14px rgba(1, 22, 137, .10);
+  --shadow-lg:       0 12px 32px rgba(1, 22, 137, .16);
+  --veu:             rgba(1, 22, 137, .28);   /* fundo atrás de modal */
+  --veu-login:       linear-gradient(135deg, var(--blau-navy) 0%, #0b3fa6 55%, var(--blau-sky) 100%);
+  --terminal-accent: var(--blau-sky);   /* no console (sempre escuro) o azul-céu tem contraste */
+
+  --font:            var(--blau-font);
+  --r-sm:            6px;
+  --r-md:            8px;
+  --r-lg:            10px;   /* .6rem, o raio mais usado no site */
+  --radius:          var(--r-md);   /* nome usado pelo htmx_kit */
+
+  /* gráficos: paleta categórica em ordem fixa + grade/eixo */
+  --serie-1: #3987e5; --serie-2: #d95926; --serie-3: #199e70; --serie-4: #c98500;
+  --serie-5: #d55181; --serie-6: #008300; --serie-7: #9085e9; --serie-8: #e66767;
+  --grade:           rgba(1, 22, 137, .07);
+  --eixo:            rgba(1, 22, 137, .18);
+}
+
+/* Barras de rolagem e controles nativos da página seguem o tema do <body> (casca SPA) */
+:root:has(> body.theme-blau) { color-scheme: light; }

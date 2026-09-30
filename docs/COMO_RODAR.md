@@ -289,10 +289,11 @@ criar uma página nova, decida a seção pela consulta que ela usa.
 
 ### 9.2 Tema visual
 
-4 temas do ecossistema (Corporativo, Verde Neutro, Cyber Dark, Blau), tokens em
-`web/static/app.css`. Cada pessoa escolhe no topo (fica num cookie do navegador); o padrão de
-quem nunca escolheu vem de Admin → Configurações. Gráficos usam uma paleta categórica
-validada para daltonismo nos 4 fundos, sem eixo Y duplo.
+Tema único: o design system Blau (`web/static/blau-tokens.css` + `blau-htmx.css`, cópias de
+`app_template/design_system/blau/` — mude lá e copie; claro, fiel ao blau.com — azul-marinho
+`#011689` nas ações/títulos, azul-céu `#36B3E3` só decorativo, vermelho `#E3010F` em erro, fonte
+PT Sans). `app.css` traz só a estrutura/componentes e lê os tokens de `blau-tokens.css`. Gráficos leem
+as cores dos tokens (paleta categórica validada para daltonismo), sem eixo Y duplo.
 
 ### 9.3 Reset do admin via CLI
 

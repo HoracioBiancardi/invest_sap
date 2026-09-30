@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-BR" data-theme="{{ tema }}">
+<html lang="pt-BR" data-theme="blau">
 <head>
 {% include "_head.html" %}
 <script src="/static/vendor/echarts.min.js?v={{ v }}" defer></script>
@@ -62,17 +62,12 @@
     {% include "_main.html" %}
   </div>
 </div>
-{# Mesmo modal de Configurações da SPA/kit: tema, bloqueio por inatividade e a própria senha. #}
+{# Mesmo modal de Configurações da SPA/kit: bloqueio por inatividade e a própria senha. #}
 <dialog id="ajustes" class="modal-kit" aria-labelledby="ajustes-titulo">
   <div class="modal-kit-cabecalho">
     <h2 id="ajustes-titulo">Configurações</h2>
     <button type="button" class="modal-kit-fechar" data-fecha-ajustes aria-label="Fechar">X</button>
   </div>
-  <label class="campo"><span class="campo-rotulo portal-rotulo">Tema da interface</span>
-    <select data-tema aria-label="Tema da interface">
-      {% for chave, rotulo in TEMAS.items() %}<option value="{{ chave }}"{% if chave == tema %} selected{% endif %}>{{ rotulo }}</option>{% endfor %}
-    </select>
-  </label>
   <label class="campo"><span class="campo-rotulo portal-rotulo">Bloqueio automático por inatividade</span>
     <select data-autolock aria-label="Bloqueio automático por inatividade">
       <option value="0">Desativado</option><option value="1">1 minuto</option><option value="5">5 minutos</option>

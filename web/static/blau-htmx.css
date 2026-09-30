@@ -1,0 +1,67 @@
+/* =====================================================================
+   DESIGN SYSTEM BLAU — adaptador do htmx_kit (htmx_kit/static/app.css)
+   Carregue depois de app.css e de blau-tokens.css. Aplica os detalhes da
+   marca nas classes do kit (.topo, .botao, .lateral-item, .portal…); as
+   cores e a fonte vêm dos tokens. Todo seletor leva [data-theme="blau"] na
+   frente: só vale com <html data-theme="blau">, então o arquivo pode ficar
+   carregado em projeto com seletor de tema.
+   ===================================================================== */
+
+/* ── Tipografia: títulos em azul-marinho e negrito, como no site ── */
+[data-theme="blau"] .titulo, [data-theme="blau"] .card-rotulo, [data-theme="blau"] .modal-kit-cabecalho h2, [data-theme="blau"] .portal-titulo, [data-theme="blau"] .marca-nome, [data-theme="blau"] h2, [data-theme="blau"] #main h3 { color: var(--blau-navy); }
+[data-theme="blau"] .titulo, [data-theme="blau"] .card-rotulo, [data-theme="blau"] .modal-kit-cabecalho h2, [data-theme="blau"] .portal-titulo, [data-theme="blau"] .marca-nome { font-weight: 700; }
+[data-theme="blau"] .titulo-icone, [data-theme="blau"] .card-rotulo .ms { color: var(--blau-sky-text); }
+:where([data-theme="blau"]) a { color: var(--blau-sky-text); }
+
+/* ── Casca: topbar branca com a faixa marinho→céu do site ── */
+[data-theme="blau"] .topo { box-shadow: var(--shadow-sm); }
+[data-theme="blau"] .topo::after { height: 2px; bottom: -2px; background: linear-gradient(90deg, var(--blau-navy) 0%, var(--blau-sky) 50%, var(--blau-navy) 100%); background-size: 200% auto; }
+[data-theme="blau"] .marca-icone--img { background: var(--surface); border: 1px solid var(--border); }
+[data-theme="blau"] .rail-item--on { color: var(--blau-navy); background: var(--blau-sky-soft); border-color: rgba(54, 179, 227, .45); }
+[data-theme="blau"] .lateral-item--on { color: var(--blau-navy); background: var(--blau-sky-soft); border-left-color: var(--blau-sky); }
+[data-theme="blau"] .lateral-alca:hover, [data-theme="blau"] .lateral-alca.arrastando { background: var(--blau-sky); }
+[data-theme="blau"] .progresso { background: var(--blau-sky); }
+
+/* ── Cards e métricas: brancos com sombra leve sobre o fundo azulado ── */
+[data-theme="blau"] .card, [data-theme="blau"] .metrica, [data-theme="blau"] .expander { box-shadow: var(--shadow-sm); }
+[data-theme="blau"] .card .metrica { box-shadow: none; }
+
+/* ── Botões ── */
+[data-theme="blau"] .botao:not(.botao--primario):not(.botao--perigo) { background: var(--surface); }
+[data-theme="blau"] .botao--primario { box-shadow: var(--shadow-sm); }
+[data-theme="blau"] .botao--primario:hover:not(:disabled) { box-shadow: 0 3px 12px rgba(1, 22, 137, .22); }
+
+[data-theme="blau"] .botao:focus-visible, [data-theme="blau"] :focus-visible { outline-color: var(--blau-sky); }
+
+/* ── Campos: fundo branco, foco em azul-céu ── */
+[data-theme="blau"] input[type="text"],
+[data-theme="blau"] input[type="password"],
+[data-theme="blau"] input[type="number"],
+[data-theme="blau"] input[type="date"],
+[data-theme="blau"] select,
+[data-theme="blau"] textarea,
+[data-theme="blau"] .multi > summary { background: #fff; }
+[data-theme="blau"] input:focus, [data-theme="blau"] select:focus, [data-theme="blau"] textarea:focus { border-color: var(--blau-sky); box-shadow: 0 0 0 3px rgba(54, 179, 227, .35); }
+[data-theme="blau"] .check input, [data-theme="blau"] .multi-item input, [data-theme="blau"] .radio-item input, [data-theme="blau"] .slider input { accent-color: var(--blau-navy); }
+[data-theme="blau"] .multi-lista { background: var(--surface); }
+
+/* ── Abas, tabelas, alertas ── */
+[data-theme="blau"] .aba--on { color: var(--blau-navy); border-bottom-color: var(--blau-sky); }
+[data-theme="blau"] .tabela-simples th, [data-theme="blau"] .tabulator .tabulator-header .tabulator-col-title { color: var(--blau-navy); }
+[data-theme="blau"] .tabulator-row.linha-selecionada { background: var(--blau-sky-soft) !important; box-shadow: inset 3px 0 0 var(--blau-sky); }
+[data-theme="blau"] .alerta--info { background: var(--blau-sky-soft); border-color: rgba(54, 179, 227, .45); }
+[data-theme="blau"] .alerta--info > .ms { color: var(--blau-sky-text); }
+[data-theme="blau"] .pill--primario { color: var(--blau-navy); }
+[data-theme="blau"] .navcard-icone, [data-theme="blau"] .portal-icone { background: var(--blau-sky-soft); color: var(--blau-navy); border-color: rgba(54, 179, 227, .45); box-shadow: none; }
+[data-theme="blau"] .spinner { border-top-color: var(--blau-sky); }
+[data-theme="blau"] .barra-cheia { background: var(--blau-sky); }
+[data-theme="blau"] .toast { background: var(--surface); }
+[data-theme="blau"] .toast--info { border-left-color: var(--blau-sky); }
+
+/* ── Modais: faixa azul-céu no topo, véu marinho ── */
+[data-theme="blau"] .modal-kit, [data-theme="blau"] .portal-caixa { border-top: 3px solid var(--blau-sky); }
+
+/* ── Login: fundo em degradê marinho → céu, card branco (sem os orbes da casca escura) ── */
+[data-theme="blau"] .aurora { display: none; }
+[data-theme="blau"] .portal::before { backdrop-filter: none; }   /* o degradê vem de --veu-login */
+

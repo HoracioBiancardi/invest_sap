@@ -1,11 +1,10 @@
-"""Administração → Configurações: tema padrão, inatividade, limiar de pedido zumbi e filtros
+"""Administração → Configurações: inatividade, limiar de pedido zumbi e filtros
 padrão (porte de `pages/92_Admin_Configuracoes.py`). Gravado na tabela `settings` do SQLite.
 """
 
 from __future__ import annotations
 
 from scripts import app_db
-from web.temas import TEMAS
 from web.ui import Ctx, Pagina
 
 _CHECKS = (
@@ -45,39 +44,31 @@ _CHECKS = (
 def render(p: Pagina, ctx: Ctx) -> None:
     admin = ctx.usuario
     p.title("Configurações do Sistema", "tune")
-    p.caption("Aparência padrão, sessão e filtros aplicados por padrão nas páginas.")
+    p.caption("Sessão e filtros aplicados por padrão nas páginas.")
 
     if ctx.acao == "salvar_config":
         try:
-            tema = ctx.form_get("tema")
-            if tema not in TEMAS:
-                raise app_db.AppDbError("Tema inválido.")
             idle = max(1, min(480, int(ctx.form_get("idle") or 30)))
             zumbi = max(30, min(3650, int(ctx.form_get("zumbi") or 365)))
         except ValueError:
             p.error("Valores numéricos inválidos.")
-        except app_db.AppDbError as exc:
-            p.error(str(exc))
         else:
             flags = {chave: ctx.form_get(chave, "0") == "1" for chave, _, _ in _CHECKS}
-            app_db.set_setting("default_theme", tema)
             app_db.set_setting("idle_minutes", idle)
             app_db.set_setting("limiar_zumbi_dias", zumbi)
             for chave, valor in flags.items():
                 app_db.set_setting(chave, valor)
             app_db.audit(
                 admin["username"], "config_alterada",
-                f"{tema}/{idle}/{zumbi}/" + "/".join(f"{k}={v}" for k, v in flags.items()),
+                f"{idle}/{zumbi}/" + "/".join(f"{k}={v}" for k, v in flags.items()),
             )
             p.success("Configurações salvas.")
 
     p.subheader("Configurações do app")
     with p.card() as card, card.acao("salvar_config") as f:
-        c1, c2, c3 = f.columns(3)
-        c1.selectbox("Tema padrão (quem ainda não escolheu um)", list(TEMAS), "tema",
-                     default=app_db.get_setting("default_theme"), formatar=lambda k: TEMAS[k])
-        c2.number_input("Bloqueio por inatividade (minutos)", "idle", 1, 480, int(app_db.get_setting("idle_minutes")))
-        c3.number_input(
+        c1, c2 = f.columns(2)
+        c1.number_input("Bloqueio por inatividade (minutos)", "idle", 1, 480, int(app_db.get_setting("idle_minutes")))
+        c2.number_input(
             'Pedidos: backlog "recente" até quantos dias (limiar de pedido zumbi)', "zumbi", 30, 3650,
             int(app_db.get_setting("limiar_zumbi_dias")), passo=30,
         )

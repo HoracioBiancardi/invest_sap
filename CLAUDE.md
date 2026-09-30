@@ -48,6 +48,10 @@ uv run pytest -v
   bloqueado, Sair), activity bar com Ajustes (tema, bloqueio por inatividade, "Alterar minha
   senha"), lateral por seção com filtro e largura arrastável, SHOW em todo campo de senha, motivo
   da saída no login (`/login?motivo=`). Ao mudar o kit no app_template, traga a mudança para cá.
+- **Design system Blau** = `web/static/blau-tokens.css` + `blau-htmx.css`, cópias de
+  `app_template/design_system/blau/` (fonte única, tema claro único, sem troca de tema), ativado por
+  `<html data-theme="blau">` em `pagina.html` e `_portal.html`. Não edite
+  as cópias: mude no app_template e copie.
 
 ---
 
